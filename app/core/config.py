@@ -3,7 +3,7 @@ from typing import Optional
 
 
 class Settings(BaseSettings):
-    database_url: str = "postgresql://postgres:password@db:5432/insightiq"
+    database_url: str = "sqlite:///./insightiq.db"
     jwt_secret: str = "replace_this_secret"
     jwt_algorithm: str = "HS256"
     access_token_expire_minutes: int = 60
