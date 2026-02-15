@@ -1,0 +1,217 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>InsightIQ — AI Business Intelligence Engine</title>
+  <meta name="description"
+    content="AI-powered business intelligence platform for data analysis, forecasting, and executive insights.">
+  <link rel="stylesheet" href="/static/style.css?t={{ now }}">
+  <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css" rel="stylesheet">
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+</head>
+
+<body>
+  <!-- Animated Background -->
+  <div class="background-3d">
+    <div class="orb orb-1"></div>
+    <div class="orb orb-2"></div>
+  </div>
+
+  <!-- ==================== LANDING PAGE ==================== -->
+  <div id="landingPage" class="landing-page">
+    <h1 class="brand-title">InsightIQ</h1>
+    <p class="brand-subtitle">AI-Powered Business Intelligence &amp; Analytics Engine</p>
+
+    <div class="upload-card">
+      <form id="uploadForm">
+        <div class="drop-zone" onclick="document.getElementById('fileInput').click()">
+          <i class="fa-solid fa-cloud-arrow-up drop-icon"></i>
+          <h3>Upload Your Dataset</h3>
+          <p>CSV or Excel — up to 50MB</p>
+          <input type="file" id="fileInput" name="file" accept=".csv,.xlsx" style="display:none;">
+        </div>
+        <input type="text" name="name" class="dataset-input" placeholder="Dataset Name (e.g., Q3 Sales Report)"
+          required>
+        <button type="submit" class="btn-primary" id="uploadBtn">
+          <i class="fa-solid fa-bolt"></i> Analyze Now
+        </button>
+        <div id="uploadStatus" class="upload-status"></div>
+      </form>
+    </div>
+
+    <p style="margin-top: 2rem; color: rgba(148,163,184,0.5); font-size: 0.85rem;">
+      Enterprise-grade analytics powered by GPT-4 &amp; Machine Learning
+    </p>
+  </div>
+
+  <!-- ==================== DASHBOARD ==================== -->
+  <div id="dashboard" class="dashboard-container">
+    <div class="dashboard-layout">
+
+      <!-- ===== Sidebar ===== -->
+      <aside class="sidebar">
+        <div class="sidebar-logo">
+          <div class="logo-icon"><i class="fa-solid fa-chart-simple"></i></div>
+          InsightIQ
+        </div>
+        <nav class="sidebar-nav">
+          <a class="sidebar-link active" onclick="switchToSection('dashboard-section', this)"><i
+              class="fa-solid fa-gauge-high"></i>
+            Dashboard</a>
+          <a class="sidebar-link" onclick="switchToSection('visualizations-section', this)"><i
+              class="fa-solid fa-chart-area"></i>
+            Visualizations</a>
+          <a class="sidebar-link" onclick="switchToSection('rootcause-section', this)"><i
+              class="fa-solid fa-magnifying-glass-chart"></i> Root Cause</a>
+          <a class="sidebar-link" onclick="switchToSection('forecast-section', this)"><i
+              class="fa-solid fa-arrow-trend-up"></i>
+            Forecasting</a>
+          <a class="sidebar-link" onclick="switchToSection('askdata-section', this)"><i
+              class="fa-solid fa-comments"></i> Ask Data</a>
+          <a class="sidebar-link" onclick="switchToSection('datasets-section', this)"><i
+              class="fa-solid fa-folder-open"></i> Datasets</a>
+        </nav>
+        <div class="sidebar-footer">
+          <a href="#"><i class="fa-solid fa-circle-question"></i> Help &amp; Support</a>
+        </div>
+      </aside>
+
+      <!-- ===== Main Content ===== -->
+      <div class="main-area">
+
+        <!-- Top Bar -->
+        <header class="top-bar">
+          <div class="top-bar-info">
+            <h2 id="topBarTitle">Dataset</h2>
+            <p id="topBarSub">Loading analytics...</p>
+          </div>
+          <div class="top-bar-actions">
+            <span id="industryBadge" class="badge badge-good" style="display:none;">
+              <i class="fa-solid fa-industry"></i>
+              <span id="industryType">Detecting...</span>
+            </span>
+            <button class="btn-outline" onclick="exportPDF()" id="exportPdfBtn">
+              <i class="fa-solid fa-file-pdf"></i> Export PDF
+            </button>
+            <button class="btn-outline" onclick="goBack()">
+              <i class="fa-solid fa-arrow-left"></i> New Upload
+            </button>
+          </div>
+        </header>
+
+        <main class="main-content">
+
+          <!-- ========== SECTION: Dashboard ========== -->
+          <div id="dashboard-section" class="content-section active">
+            <div id="metricsSection" class="metrics-grid"></div>
+
+            <div id="chartsSection" class="charts-grid"></div>
+            <div id="chartsRow2" class="charts-grid"></div>
+
+            <div class="charts-grid">
+              <div class="section">
+                <h3 class="section-title"><i class="fa-solid fa-table-columns"></i> Column Statistics</h3>
+                <div class="table-responsive">
+                  <table class="data-table">
+                    <thead>
+                      <tr>
+                        <th>Column</th>
+                        <th>Type</th>
+                        <th>Non-Null</th>
+                        <th>Missing %</th>
+                      </tr>
+                    </thead>
+                    <tbody id="statsBody"></tbody>
+                  </table>
+                </div>
+              </div>
+              <div class="section">
+                <h3 class="section-title"><i class="fa-solid fa-lightbulb"></i> AI Insights</h3>
+                <div id="insights"></div>
+              </div>
+            </div>
+          </div>
+
+          <!-- ========== SECTION: Visualizations ========== -->
+          <div id="visualizations-section" class="content-section">
+            <div id="vizChartsArea"></div>
+          </div>
+
+          <!-- ========== SECTION: Root Cause ========== -->
+          <div id="rootcause-section" class="content-section">
+            <div id="rootCauseSection" class="section">
+              <h3 class="section-title"><i class="fa-solid fa-magnifying-glass-chart"></i> Root Cause Analysis</h3>
+              <p class="section-subtitle">Automated detection of revenue drivers and detractors</p>
+              <div id="rootCauseContent">
+                <p style="color: var(--text-muted);">Analyzing drivers...</p>
+              </div>
+            </div>
+          </div>
+
+          <!-- ========== SECTION: Forecasting ========== -->
+          <div id="forecast-section" class="content-section">
+            <div id="forecastSection" class="section">
+              <h3 class="section-title"><i class="fa-solid fa-arrow-trend-up"></i> Revenue Forecast</h3>
+              <p class="section-subtitle">Projected trend with confidence band</p>
+              <div style="height: 350px; width: 100%; position: relative;">
+                <canvas id="forecastChart"></canvas>
+              </div>
+              <div id="forecastTable"></div>
+            </div>
+
+            <div id="summarySection" class="section" style="margin-top:1.2rem;">
+              <h3 class="section-title"><i class="fa-solid fa-brain"></i> Executive Summary</h3>
+              <div id="summaryContent" class="summary-content">
+                <p style="color: var(--text-muted);">Generating AI summary...</p>
+              </div>
+            </div>
+          </div>
+
+          <!-- ========== SECTION: Ask Your Data ========== -->
+          <div id="askdata-section" class="content-section">
+            <div id="chatSection" class="section">
+              <h3 class="section-title"><i class="fa-solid fa-comments"></i> Ask Your Data</h3>
+              <div class="chat-interface">
+                <div id="chatBox" class="chat-messages">
+                  <div class="message bot">
+                    Hi! I'm your AI analyst. Ask me anything about your dataset — e.g., "What is the total revenue by
+                    region?"
+                  </div>
+                </div>
+                <div class="chat-input-area">
+                  <input type="text" id="questionInput" placeholder="Ask a question about your data...">
+                  <button onclick="askQuestion()" class="btn-primary"
+                    style="width: auto; padding: 10px 24px; margin: 0;">
+                    <i class="fa-solid fa-paper-plane"></i>
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- ========== SECTION: Datasets ========== -->
+          <div id="datasets-section" class="content-section">
+            <div class="section" style="text-align:center; padding:3rem 2rem;">
+              <i class="fa-solid fa-folder-open" style="font-size:3rem; color:var(--accent); margin-bottom:1rem;"></i>
+              <h3 class="section-title" style="justify-content:center; font-size:1.2rem; margin-bottom:0.5rem;">Dataset
+                Management</h3>
+              <p style="color:var(--text-muted); margin-bottom:1.5rem;">Upload a new dataset to start a fresh analysis
+              </p>
+              <button class="btn-primary" onclick="goBack()"
+                style="width:auto; padding:12px 32px; display:inline-flex; align-items:center; gap:8px;">
+                <i class="fa-solid fa-cloud-arrow-up"></i> Upload New Dataset
+              </button>
+            </div>
+          </div>
+
+        </main>
+      </div>
+    </div>
+  </div>
+
+  <script src="/static/app.js?t={{ now }}"></script>
+</body>
+
+</html>

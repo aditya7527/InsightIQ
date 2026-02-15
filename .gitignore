@@ -1,0 +1,34 @@
+# Environment
+.env
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# Database files
+*.db
+*.sqlite3
+
+# Uploaded data
+data/uploads/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+
+# OS
+Thumbs.db
+.DS_Store
+
+# Test/debug files
+test_*.csv
+test_*.html
+upload*.json
+upload_resp.txt
+report*.pdf
+execution_log.txt
+local_data.db
+
+# Gemini/Agent metadata
+.gemini/
+.agent/
