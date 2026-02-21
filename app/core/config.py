@@ -1,6 +1,6 @@
 from pydantic_settings import BaseSettings
 from pydantic import field_validator
-from typing import Optional, List
+from typing import Optional, List, Union
 from dotenv import load_dotenv
 import os
 
@@ -14,7 +14,7 @@ class Settings(BaseSettings):
     jwt_algorithm: str = "HS256"
     access_token_expire_minutes: int = 60
     gemini_api_key: Optional[str] = None
-    cors_origins: List[str] = ["http://localhost:3000", "http://127.0.0.1:3000"]
+    cors_origins: Union[List[str], str] = ["http://localhost:3000", "http://127.0.0.1:3000"]
     upload_dir: str = "./data/uploads"
     app_host: str = "0.0.0.0"
     app_port: int = 8001
@@ -23,6 +23,14 @@ class Settings(BaseSettings):
     @classmethod
     def parse_cors_origins(cls, value):
         if isinstance(value, str):
+            # If it's a JSON-like list string, try to parse it as JSON
+            if value.startswith("[") and value.endswith("]"):
+                try:
+                    import json
+                    return json.loads(value)
+                except:
+                    pass
+            # Fallback to comma-separated string
             return [v.strip() for v in value.split(",") if v.strip()]
         return value
 
