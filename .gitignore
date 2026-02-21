@@ -15,6 +15,7 @@ data/uploads/
 .vscode/
 .idea/
 *.swp
+frontend/node_modules/
 
 # OS
 Thumbs.db

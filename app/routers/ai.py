@@ -17,9 +17,10 @@ from app.forecasting.models import (
 )
 from app.services.root_cause_analysis import analyze_root_causes, detect_anomalies
 from app.ai.conversational import ask_question
-from app.ai.gpt_service import generate_insights_text, query_gpt
+from app.ai.gpt_service import query_gpt
 from app.services.analytics import run_sql
 from app.database import engine
+from app.utils.sql_safety import validate_dataset_table_name, ensure_table_exists
 
 router = APIRouter(tags=["AI Features"])
 logger = logging.getLogger(__name__)
@@ -42,9 +43,11 @@ class AskRequest(BaseModel):
 
 def _get_df(table_name: str) -> pd.DataFrame:
     """Get DataFrame from cache or database."""
-    if table_name in _datasets:
-        return _datasets[table_name]
-    rows = run_sql(engine, f"SELECT * FROM {table_name}")
+    safe_table_name = validate_dataset_table_name(table_name)
+    if safe_table_name in _datasets:
+        return _datasets[safe_table_name]
+    ensure_table_exists(engine, safe_table_name)
+    rows = run_sql(engine, f'SELECT * FROM "{safe_table_name}"')
     df = pd.DataFrame(rows)
     if df.empty:
         raise HTTPException(status_code=404, detail="Dataset not found")
@@ -175,7 +178,7 @@ def get_summary(table_name: str):
 # ========== ROOT CAUSE ANALYSIS ==========
 @router.post("/root-cause")
 def analyze_root_cause(request: RootCauseRequest):
-    """Analyze root causes of revenue changes — never returns undefined."""
+    """Analyze root causes of revenue changes — normalized and thresholded."""
     try:
         df = _get_df(request.table_name)
         df = _compute_revenue(df)
@@ -183,20 +186,24 @@ def analyze_root_cause(request: RootCauseRequest):
         # Use Revenue as primary metric
         metric_column = 'Revenue' if 'Revenue' in df.columns else request.metric_column
         if not metric_column:
-            metric_column = auto_detect_revenue_column(df)
-            if not metric_column:
-                return {
-                    'metric': 'unknown',
-                    'top_drivers': [],
-                    'insight_summary': 'No numeric metric column found for analysis.',
-                    'recommendations': ['Upload a dataset with numeric values.']
-                }
+             metric_column = auto_detect_revenue_column(df)
+        
+        if not metric_column:
+             return {
+                 'metric': 'unknown',
+                 'top_drivers': [],
+                 'insight_summary': 'No numeric metric column found.',
+                 'recommendations': []
+             }
 
         group_cols = request.group_by
         if group_cols:
             group_cols = [c for c in group_cols if c in df.columns]
 
+        # Call updated strict analysis
         analysis = analyze_root_causes(df, metric_column, group_cols)
+        
+        # Add anomalies
         anomalies = detect_anomalies(df, metric_column)
         analysis['anomalies'] = anomalies[:5]
 
@@ -208,39 +215,80 @@ def analyze_root_cause(request: RootCauseRequest):
             'metric': request.metric_column or 'Revenue',
             'top_drivers': [],
             'insight_summary': f'Analysis error: {str(e)}',
-            'recommendations': ['Check dataset format and try again.']
+            'recommendations': []
         }
 
 
 # ========== FORECASTING ==========
 @router.post("/forecast")
 def forecast_endpoint(request: ForecastRequest):
-    """Monthly revenue forecast with historical data and confidence bands."""
+    """
+    Generate production-grade forecast (SARIMAX/HW) with reliability scores.
+    """
     try:
+        from app.services.forecasting_service import generate_forecast
+        
         df = _get_df(request.table_name)
         df = _compute_revenue(df)
+        
+        # Identify columns
+        revenue_col = 'Revenue' if 'Revenue' in df.columns else auto_detect_revenue_column(df)
+        date_col = auto_detect_date_column(df)
+        
+        if not revenue_col or not date_col:
+             return {
+                 "success": False,
+                 "message": "Could not identify Date or Revenue columns."
+             }
 
-        result = forecast_monthly_revenue(df, periods=request.periods)
-
-        # Ensure consistent response
-        if 'error' in result and result['error']:
-            return {
-                'success': False,
-                'forecast': [],
-                'historical': result.get('historical', []),
-                'message': result['error']
-            }
-
+        # Generate Forecast
+        result = generate_forecast(df, revenue_col, date_col, periods=request.periods)
+        
         return result
 
     except Exception as e:
-        logger.error(f"Forecast error: {e}")
+        logger.error(f"Forecast endpoint error: {e}")
         return {
             'success': False,
             'forecast': [],
             'historical': [],
             'message': str(e)
         }
+
+
+# ========== NARRATIVE / SUMMARY ==========
+@router.post("/summary/deterministic")
+def summary_deterministic(request: RootCauseRequest):
+    """
+    Generate deterministic narratives combining forecast and root cause data.
+    This replaces/augments the LLM-based summary.
+    """
+    try:
+        from app.services.forecasting_service import generate_forecast
+        from app.services.narrative_service import generate_summary as gen_narrative
+        
+        df = _get_df(request.table_name)
+        df = _compute_revenue(df)
+        
+        revenue_col = 'Revenue' if 'Revenue' in df.columns else auto_detect_revenue_column(df)
+        date_col = auto_detect_date_column(df)
+        
+        # 1. Get Forecast Data
+        forecast_data = {}
+        if revenue_col and date_col:
+             forecast_data = generate_forecast(df, revenue_col, date_col, periods=3)
+             
+        # 2. Get Root Cause Data
+        root_cause_data = analyze_root_causes(df, revenue_col, request.group_by)
+        
+        # 3. Generate Narrative
+        narrative = gen_narrative(forecast_data, root_cause_data)
+        
+        return narrative
+
+    except Exception as e:
+        logger.error(f"Narrative error: {e}")
+        return {"summary": "Error generating narrative.", "error": str(e)}
 
 
 # ========== ASK YOUR DATA ==========

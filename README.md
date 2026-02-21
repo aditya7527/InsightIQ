@@ -1,93 +1,46 @@
-# InsightIQ — AI-Powered Business Intelligence Engine
+# InsightIQ
 
-InsightIQ is an enterprise-grade AI analytics platform designed to transform raw datasets into actionable executive insights. It leverages GPT-4 for narrative generation, statistical modeling for forecasting, and advanced pattern recognition for root cause analysis.
+InsightIQ is a FastAPI-based business intelligence application that turns CSV/Excel uploads into analytics, forecasting, root-cause analysis, and executive summaries.
 
-## 🚀 Key Features
+## Stack
 
-*   **📈 Intelligent Ingestion**: Auto-detects schema, industry context, and data quality issues.
-*   **🤖 AI Executive Summary**: Generates C-suite level narratives identifying key trends and risks.
-*   **🔍 Root Cause Analysis**: Automatically identifies drivers behind metric changes (e.g., "Why did revenue drop?").
-*   **🔮 Automated Forecasting**: Predicts future trends using Prophet (with linear regression fallback).
-*   **💬 Ask Your Data**: Natural language query interface (NLP-to-SQL) for instant answers.
-*   **📄 PDF Reports**: Exports professional, ready-to-present executive PDF reports.
-*   **📊 Interactive Dashboard**: Modern, responsive UI with dynamic charting and drill-down capabilities.
+- Backend: FastAPI, SQLAlchemy, Pandas
+- AI Provider: Google Gemini (`google-generativeai`)
+- Forecasting: Prophet, Statsmodels, scikit-learn
+- Frontend: Server-rendered HTML + vanilla JavaScript
+- Database: SQLite by default, PostgreSQL supported via `DATABASE_URL`
 
-## 🛠️ Tech Stack
+## Runtime Frontend
 
-*   **Backend**: FastAPI, SQLAlchemy, Pydantic, Pandas
-*   **AI & ML**: OpenAI GPT-4, Prophet, Statsmodels, Scikit-learn
-*   **Frontend**: HTML5, Vanilla JS, Chart.js, Tailwind-inspired CSS
-*   **Database**: PostgreSQL 15
-*   **Infrastructure**: Docker, Docker Compose
+The active UI is served from:
+- `app/templates/index.html`
+- `app/static/app.js`
+- `app/static/style.css`
 
-## ⚡ Quick Start
+## Quick Start
 
-### Prerequisites
-*   Python 3.9+
-*   OpenAI API Key
+1. Create and activate a virtual environment.
+2. Install dependencies:
+   - `pip install -r requirements.txt`
+3. Configure environment variables in `.env`:
+   - `DATABASE_URL=sqlite:///./insightiq.db`
+   - `JWT_SECRET=replace_with_a_strong_secret`
+   - `GEMINI_API_KEY=your_api_key`
+   - `APP_ENV=development`
+   - `CORS_ORIGINS=http://localhost:3000,http://127.0.0.1:3000`
+4. Run:
+   - `uvicorn app.main:app --reload --port 8001`
 
-### Local Installation
+Open `http://localhost:8001`.
 
-1.  **Clone the repository**
-    ```bash
-    git clone https://github.com/yourusername/insightiq.git
-    cd insightiq
-    ```
+## Production Notes
 
-2.  **Configure Environment**
-    Create a `.env` file in the root directory:
-    ```env
-    DATABASE_URL=sqlite:///./insightiq.db
-    OPENAI_API_KEY=your_openai_api_key_here
-    JWT_SECRET=your_super_secret_key
-    ```
+- Set `APP_ENV=production` or `staging`.
+- Use a strong `JWT_SECRET` (24+ chars).
+- `GEMINI_API_KEY` is required in production/staging.
+- Configure `CORS_ORIGINS` explicitly for trusted domains only.
 
-3.  **Run Locally**
-    Windows:
-    ```bash
-    run_local.bat
-    ```
-    
-    Linux/Mac:
-    ```bash
-    pip install -r requirements.txt
-    python init_local_db.py
-    uvicorn app.main:app --reload --port 8001
-    ```
-    
-    The application will be available at `http://localhost:8001`.
+## Tests
 
-## 🚀 Deployment (Railway)
-
-1.  **Push to GitHub**
-2.  **Connect in Railway**
-3.  **Set Environment Variables**:
-    *   `DATABASE_URL`: (Add your PostgreSQL URL)
-    *   `OPENAI_API_KEY`: (Add your key)
-    *   `JWT_SECRET`: (Add a secret)
-    *   `PORT`: (Railway sets this automatically)
-4.  **Start Command**:
-    ```bash
-    uvicorn app.main:app --host 0.0.0.0 --port $PORT
-    ```
-
-## 📖 Usage Guide
-
-1.  **Upload Data**: Drag and drop your CSV/Excel file (e.g., sales data, financial reports).
-2.  **View Dashboard**: Instantly see key metrics, quality scores, and AI-generated summaries.
-3.  **Analyze**:
-    *   Check **Root Cause** tab to understand drivers.
-    *   View **Forecasts** to see future trends.
-    *   Use **Ask Your Data** to query specific details (e.g., "What was the total profit in Q4?").
-4.  **Export**: Click "Export Report" to download a comprehensive PDF for your stakeholders.
-
-## 📚 API Documentation
-
-Once running, access the interactive API docs at:
-*   Swagger UI: `/docs`
-*   ReDoc: `/redoc`
-
-## 🛡️ License
-
-MIT values
-
+- Run tests with:
+  - `pytest -q -p no:cacheprovider`

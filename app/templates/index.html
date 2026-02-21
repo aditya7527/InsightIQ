@@ -10,13 +10,40 @@
   <link rel="stylesheet" href="/static/style.css?t={{ now }}">
   <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css" rel="stylesheet">
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+  <style>
+    /* Force Override for Forecast Section */
+    #forecast-section {
+      background: #ffffff !important;
+      border-radius: 12px !important;
+      padding: 24px !important;
+      margin-top: 2rem !important;
+      box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06) !important;
+      border: 1px solid #e2e8f0 !important;
+      position: relative !important;
+      z-index: 99 !important;
+      display: block !important;
+    }
+
+    #forecast-section h2,
+    #forecast-section h3,
+    #forecast-section .section-title,
+    #forecast-section p,
+    #forecast-section label {
+      color: #1e293b !important;
+      text-shadow: none !important;
+    }
+
+    #forecast-section .section-subtitle {
+      color: #64748b !important;
+      text-shadow: none !important;
+    }
+  </style>
 </head>
 
 <body>
-  <!-- Animated Background -->
-  <div class="background-3d">
-    <div class="orb orb-1"></div>
-    <div class="orb orb-2"></div>
+  <!-- Aceternity Aurora Background -->
+  <div class="aurora-container">
+    <div class="aceternity-aurora"></div>
   </div>
 
   <!-- ==================== LANDING PAGE ==================== -->
@@ -29,8 +56,8 @@
         <div class="drop-zone" onclick="document.getElementById('fileInput').click()">
           <i class="fa-solid fa-cloud-arrow-up drop-icon"></i>
           <h3>Upload Your Dataset</h3>
-          <p>CSV or Excel — up to 50MB</p>
-          <input type="file" id="fileInput" name="file" accept=".csv,.xlsx" style="display:none;">
+          <p>Supported formats: CSV, XLSX, XLS</p>
+          <input type="file" id="fileInput" name="file" accept=".csv,.xlsx,.xls" style="display:none;">
         </div>
         <input type="text" name="name" class="dataset-input" placeholder="Dataset Name (e.g., Q3 Sales Report)"
           required>
@@ -58,7 +85,7 @@
         </div>
         <nav class="sidebar-nav">
           <a class="sidebar-link active" onclick="switchToSection('dashboard-section', this)"><i
-              class="fa-solid fa-gauge-high"></i>
+              class="fa-solid fa-house"></i>
             Dashboard</a>
           <a class="sidebar-link" onclick="switchToSection('visualizations-section', this)"><i
               class="fa-solid fa-chart-area"></i>
@@ -71,7 +98,7 @@
           <a class="sidebar-link" onclick="switchToSection('askdata-section', this)"><i
               class="fa-solid fa-comments"></i> Ask Data</a>
           <a class="sidebar-link" onclick="switchToSection('datasets-section', this)"><i
-              class="fa-solid fa-folder-open"></i> Datasets</a>
+              class="fa-solid fa-database"></i> Datasets</a>
         </nav>
         <div class="sidebar-footer">
           <a href="#"><i class="fa-solid fa-circle-question"></i> Help &amp; Support</a>
@@ -88,15 +115,15 @@
             <p id="topBarSub">Loading analytics...</p>
           </div>
           <div class="top-bar-actions">
-            <span id="industryBadge" class="badge badge-good" style="display:none;">
-              <i class="fa-solid fa-industry"></i>
-              <span id="industryType">Detecting...</span>
-            </span>
+            <div class="dataset-select">
+              <span id="currentDatasetName">sales_data</span>
+              <i class="fa-solid fa-chevron-down"></i>
+            </div>
             <button class="btn-outline" onclick="exportPDF()" id="exportPdfBtn">
-              <i class="fa-solid fa-file-pdf"></i> Export PDF
+              <i class="fa-solid fa-file-pdf"></i>
             </button>
             <button class="btn-outline" onclick="goBack()">
-              <i class="fa-solid fa-arrow-left"></i> New Upload
+              <i class="fa-solid fa-plus"></i> New
             </button>
           </div>
         </header>
@@ -139,10 +166,9 @@
             <div id="vizChartsArea"></div>
           </div>
 
-          <!-- ========== SECTION: Root Cause ========== -->
           <div id="rootcause-section" class="content-section">
-            <div id="rootCauseSection" class="section">
-              <h3 class="section-title"><i class="fa-solid fa-magnifying-glass-chart"></i> Root Cause Analysis</h3>
+            <div id="rootCauseSection" class="section accent-red">
+              <h3 class="section-title"><i class="fa-solid fa-bullseye"></i> Period Analysis</h3>
               <p class="section-subtitle">Automated detection of revenue drivers and detractors</p>
               <div id="rootCauseContent">
                 <p style="color: var(--text-muted);">Analyzing drivers...</p>
@@ -152,63 +178,63 @@
 
           <!-- ========== SECTION: Forecasting ========== -->
           <div id="forecast-section" class="content-section">
-            <div id="forecastSection" class="section">
-              <h3 class="section-title"><i class="fa-solid fa-arrow-trend-up"></i> Revenue Forecast</h3>
-              <p class="section-subtitle">Projected trend with confidence band</p>
-              <div style="height: 350px; width: 100%; position: relative;">
-                <canvas id="forecastChart"></canvas>
-              </div>
-              <div id="forecastTable"></div>
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px;">
+              <h3 class="section-title"><i class="fa-solid fa-chart-line"></i> Revenue Forecast</h3>
             </div>
-
-            <div id="summarySection" class="section" style="margin-top:1.2rem;">
-              <h3 class="section-title"><i class="fa-solid fa-brain"></i> Executive Summary</h3>
-              <div id="summaryContent" class="summary-content">
-                <p style="color: var(--text-muted);">Generating AI summary...</p>
-              </div>
+            <p class="section-subtitle">Projected trend with confidence band</p>
+            <div style="height: 350px; width: 100%; position: relative;">
+              <canvas id="forecastChart"></canvas>
             </div>
+            <div id="forecastTable"></div>
           </div>
 
-          <!-- ========== SECTION: Ask Your Data ========== -->
-          <div id="askdata-section" class="content-section">
-            <div id="chatSection" class="section">
-              <h3 class="section-title"><i class="fa-solid fa-comments"></i> Ask Your Data</h3>
-              <div class="chat-interface">
-                <div id="chatBox" class="chat-messages">
-                  <div class="message bot">
-                    Hi! I'm your AI analyst. Ask me anything about your dataset — e.g., "What is the total revenue by
-                    region?"
-                  </div>
-                </div>
-                <div class="chat-input-area">
-                  <input type="text" id="questionInput" placeholder="Ask a question about your data...">
-                  <button onclick="askQuestion()" class="btn-primary"
-                    style="width: auto; padding: 10px 24px; margin: 0;">
-                    <i class="fa-solid fa-paper-plane"></i>
-                  </button>
-                </div>
-              </div>
+          <div id="summarySection" class="section" style="margin-top:1.2rem;">
+            <h3 class="section-title"><i class="fa-solid fa-brain"></i> Executive Summary</h3>
+            <div id="summaryContent" class="summary-content">
+              <p style="color: var(--text-muted);">Generating AI summary...</p>
             </div>
           </div>
+      </div>
 
-          <!-- ========== SECTION: Datasets ========== -->
-          <div id="datasets-section" class="content-section">
-            <div class="section" style="text-align:center; padding:3rem 2rem;">
-              <i class="fa-solid fa-folder-open" style="font-size:3rem; color:var(--accent); margin-bottom:1rem;"></i>
-              <h3 class="section-title" style="justify-content:center; font-size:1.2rem; margin-bottom:0.5rem;">Dataset
-                Management</h3>
-              <p style="color:var(--text-muted); margin-bottom:1.5rem;">Upload a new dataset to start a fresh analysis
-              </p>
-              <button class="btn-primary" onclick="goBack()"
-                style="width:auto; padding:12px 32px; display:inline-flex; align-items:center; gap:8px;">
-                <i class="fa-solid fa-cloud-arrow-up"></i> Upload New Dataset
+      <!-- ========== SECTION: Ask Your Data ========== -->
+      <div id="askdata-section" class="content-section">
+        <div id="chatSection" class="section">
+          <h3 class="section-title"><i class="fa-solid fa-comments"></i> Ask Your Data</h3>
+          <div class="chat-interface">
+            <div id="chatBox" class="chat-messages">
+              <div class="message bot">
+                Hi! I'm your AI analyst. Ask me anything about your dataset — e.g., "What is the total revenue by
+                region?"
+              </div>
+            </div>
+            <div class="chat-input-area">
+              <input type="text" id="questionInput" placeholder="Ask a question about your data...">
+              <button onclick="askQuestion()" class="btn-primary" style="width: auto; padding: 10px 24px; margin: 0;">
+                <i class="fa-solid fa-paper-plane"></i>
               </button>
             </div>
           </div>
-
-        </main>
+        </div>
       </div>
+
+      <!-- ========== SECTION: Datasets ========== -->
+      <div id="datasets-section" class="content-section">
+        <div class="section" style="text-align:center; padding:3rem 2rem;">
+          <i class="fa-solid fa-folder-open" style="font-size:3rem; color:var(--accent); margin-bottom:1rem;"></i>
+          <h3 class="section-title" style="justify-content:center; font-size:1.2rem; margin-bottom:0.5rem;">Dataset
+            Management</h3>
+          <p style="color:var(--text-muted); margin-bottom:1.5rem;">Upload a new dataset to start a fresh analysis
+          </p>
+          <button class="btn-primary" onclick="goBack()"
+            style="width:auto; padding:12px 32px; display:inline-flex; align-items:center; gap:8px;">
+            <i class="fa-solid fa-cloud-arrow-up"></i> Upload New Dataset
+          </button>
+        </div>
+      </div>
+
+      </main>
     </div>
+  </div>
   </div>
 
   <script src="/static/app.js?t={{ now }}"></script>

@@ -39,9 +39,10 @@ git push -u origin main
     *   `PYTHON_VERSION`: `3.9.13` (Recommended)
     *   `DATABASE_URL`: `sqlite:///./insightiq.db`
         > *Note: On the free tier, SQLite data resets if the app restarts. For permanent data, use Render's PostgreSQL database.*
-    *   `OPENAI_API_KEY`: `your_openai_key`
-    *   `JWT_SECRET`: `any_random_secret_string`
-    *   `GROQ_API_KEY`: `your_groq_key` (if using Groq)
+    *   `GEMINI_API_KEY`: `your_gemini_key`
+    *   `JWT_SECRET`: `strong_secret_at_least_24_chars`
+    *   `APP_ENV`: `production`
+    *   `CORS_ORIGINS`: `https://your-frontend-domain.com`
 
 ## 3. Deploy to Railway
 
@@ -51,7 +52,7 @@ git push -u origin main
 2.  Click **New Project** → **Deploy from GitHub repo**.
 3.  Select your `insightiq` repo.
 4.  Railway will auto-detect Python.
-5.  Go to **Variables** tab and add the same variables as above (`DATABASE_URL`, `OPENAI_API_KEY`, etc.).
+5.  Go to **Variables** tab and add the same variables as above (`DATABASE_URL`, `GEMINI_API_KEY`, etc.).
 6.  (Optional) Add a **PostgreSQL** plugin in Railway for a production-grade database.
 
 ## Troubleshooting

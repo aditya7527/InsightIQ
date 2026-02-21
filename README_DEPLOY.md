@@ -6,7 +6,7 @@ See the project root README for quick start. This file contains detailed deploym
 
 ```bash
 cp .env.example .env
-export OPENAI_API_KEY=your_key
+export GEMINI_API_KEY=your_key
 docker-compose up --build
 ```
 
