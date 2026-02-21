@@ -28,6 +28,11 @@ app.mount("/static", StaticFiles(directory="app/static"), name="static")
 def startup_event():
     from dotenv import load_dotenv
     load_dotenv()
+    # Create tables
+    from app.database import engine
+    from app.models import metadata
+    metadata.create_all(bind=engine)
+    
     os.makedirs(settings.upload_dir, exist_ok=True)
     logger.info("App startup in %s mode", settings.app_env)
 
