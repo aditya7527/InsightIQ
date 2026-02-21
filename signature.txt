@@ -1,0 +1,1 @@
+(self, file: <class 'BinaryIO'>, *, size: Optional[int] = None, filename: Optional[str] = None, headers: 'typing.Optional[Headers]' = None) -> None

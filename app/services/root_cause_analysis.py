@@ -39,7 +39,17 @@ def analyze_root_causes(
     Returns structured drivers with 'driver' key — never 'undefined'.
     """
     try:
-        # ── Step 0: Compute Revenue if needed ──
+        # ── Step 0: Compute Output Structure Default ──
+        # (This ensures we format the response correctly even if we exit early)
+        
+        # ── Step 1: Detect date column ──
+        date_col = None
+        for col in df.columns:
+            if any(kw in col.lower() for kw in ['date', 'time', 'day', 'period']):
+                date_col = col
+                break
+                
+        # ── Step 2: Compute Revenue if needed ──
         qty_col = _find_col(df, ['quantity', 'qty'])
         price_col = _find_col(df, ['unitprice', 'unit_price', 'price'])
         if metric_col not in df.columns and qty_col and price_col:
@@ -49,112 +59,144 @@ def analyze_root_causes(
             metric_col = 'Revenue'
 
         if metric_col not in df.columns:
-            return _safe_response(metric_col, error='Column not found')
+           return _safe_response(metric_col, error='Column not found')
 
-        # ── Step 1: Detect date column ──
-        date_col = None
-        for col in df.columns:
-            if any(kw in col.lower() for kw in ['date', 'time', 'day', 'period']):
-                date_col = col
-                break
+        # ── Step 3: Trigger Logic ──
+        # Check total revenue and MoM change
+        total_revenue = df[metric_col].sum()
+        
+        # If no date column, fallback to static
+        if not date_col:
+             return _static_group_analysis(df, metric_col, group_cols)
 
-        # ── Step 2: Try month-over-month analysis ──
-        if date_col:
-            try:
-                ts = df.copy()
-                ts['_dt'] = pd.to_datetime(ts[date_col], errors='coerce')
-                ts = ts.dropna(subset=['_dt'])
-                ts['_month'] = ts['_dt'].dt.to_period('M')
-                months = ts['_month'].unique()
-                months = sorted(months)
+        ts = df.copy()
+        ts['_dt'] = pd.to_datetime(ts[date_col], errors='coerce')
+        ts = ts.dropna(subset=['_dt'])
+        ts['_month'] = ts['_dt'].dt.to_period('M')
+        months = sorted(ts['_month'].unique())
+        
+        if len(months) < 2:
+             return _static_group_analysis(df, metric_col, group_cols)
+             
+        latest = months[-1]
+        previous = months[-2]
+        df_latest = ts[ts['_month'] == latest]
+        df_previous = ts[ts['_month'] == previous]
+        
+        val_latest = df_latest[metric_col].sum()
+        val_prev = df_previous[metric_col].sum()
+        change_val = val_latest - val_prev
+        
+        change_pct = 0
+        if val_prev > 0:
+            change_pct = (change_val / val_prev) * 100
+            
+        logger.debug(
+            "MoM baseline: previous=%s latest=%s change_pct=%.2f",
+            val_prev,
+            val_latest,
+            change_pct,
+        )
 
-                if len(months) >= 2:
-                    latest = months[-1]
-                    previous = months[-2]
-                    df_latest = ts[ts['_month'] == latest]
-                    df_previous = ts[ts['_month'] == previous]
+        # Trigger Condition: Only run if abs(change) >= 2% OR total > 500 (lower for testing)
+        if abs(change_pct) < 2 or val_latest < 500:
+            return {
+                'metric': metric_col,
+                'current_value': float(val_latest),
+                'previous_value': float(val_prev),
+                'kpi_change_percent': round(change_pct, 1),
+                'top_drivers': [],
+                'insight_summary': "No significant revenue change detected.",
+                'recommendations': []
+            }
+            
+        # ── Step 4: Driver Analysis with Dynamic Dimension Detection ──
+        # Scan all columns that are not metric_col, date_col, or ID
+        potential_dims = [
+            col for col in df.columns 
+            if col not in [metric_col, date_col] 
+            and not _is_id(col)
+            and df[col].dtype in ['object', 'category', 'string']
+        ]
+        logger.debug("Potential dimensions found: %s", potential_dims)
+        
+        raw_impacts = []
+        for col in potential_dims:
+            # Compare this dimension
+            l_grp = df_latest.groupby(col)[metric_col].sum()
+            p_grp = df_previous.groupby(col)[metric_col].sum()
+            all_keys = set(l_grp.index) | set(p_grp.index)
+            
+            for k in all_keys:
+                if pd.isna(k) or k == '': continue
+                imp = l_grp.get(k, 0) - p_grp.get(k, 0)
+                if abs(imp) > 0.01: 
+                    raw_impacts.append({
+                        'dimension': col,
+                        'name': str(k),
+                        'impact_value': imp
+                    })
+                        
+        # Sort by absolute impact to find top drivers
+        raw_impacts.sort(key=lambda x: abs(x['impact_value']), reverse=True)
+        
+        total_abs_impact = sum(abs(x['impact_value']) for x in raw_impacts)
+        
+        final_drivers = []
+        if total_abs_impact > 0:
+            for item in raw_impacts[:6]: # Top 6 drivers for more context
+                norm_pct = (abs(item['impact_value']) / total_abs_impact) * 100
+                final_drivers.append({
+                    'dimension': item['dimension'],
+                    'name': item['name'],
+                    'impact_value': float(item['impact_value']),
+                    'normalized_percent': round(norm_pct, 1),
+                    'direction': 'positive' if item['impact_value'] > 0 else 'negative'
+                })
+        
+        # ── Step 5: AI Narrative Layer ──
+        insight_summary = f"Revenue changed by {change_pct:.1f}%. Top drivers analyzed."
+        recommendations = _generate_recommendations(final_drivers, change_pct)
+        ai_narrative = None
+        
+        try:
+            from app.ai.gpt_service import query_gpt
+            payload = {
+                "metric": metric_col,
+                "change_pct": change_pct,
+                "drivers": final_drivers,
+                "total_drivers_found": len(raw_impacts)
+            }
+            prompt = (
+                "You are a business intelligence expert. Analyze these revenue drivers for a month-over-month change. "
+                "Provide a natural, professional 2-sentence summary of what happened. "
+                "Then provide 3 very specific, data-driven recommendations.\n"
+                f"Data: {payload}\n"
+                "Format as JSON: {\"summary\": \"...\", \"recommendations\": [\"...\", \"...\", \"...\"]}"
+            )
+            ai_raw = query_gpt(prompt, max_tokens=300)
+            import json
+            # Extract JSON
+            start = ai_raw.find('{')
+            end = ai_raw.rfind('}') + 1
+            if start != -1 and end > start:
+                ai_data = json.loads(ai_raw[start:end])
+                insight_summary = ai_data.get('summary', insight_summary)
+                recommendations = ai_data.get('recommendations', recommendations)
+                ai_narrative = True
+        except Exception as ai_err:
+            logger.warning(f"AI Narrative failed: {ai_err}")
 
-                    total_latest = df_latest[metric_col].sum()
-                    total_previous = df_previous[metric_col].sum()
-                    total_change = total_latest - total_previous
-
-                    drivers = []
-
-                    # ── Driver 1: Country breakdown ──
-                    country_col = _find_col(df, ['country', 'region', 'state', 'territory', 'area'])
-                    if country_col and country_col in df.columns:
-                        drivers += _compare_by_group(
-                            df_latest, df_previous, metric_col, country_col, total_change
-                        )
-
-                    # ── Driver 2: Product breakdown ──
-                    product_col = _find_col(df, ['description', 'product', 'item', 'category', 'productcategory'])
-                    if product_col and product_col in df.columns:
-                        drivers += _compare_by_group(
-                            df_latest, df_previous, metric_col, product_col, total_change, top_n=10
-                        )
-
-                    # ── Driver 3: Returns impact ──
-                    if qty_col and qty_col in df.columns:
-                        returns_latest = df_latest[pd.to_numeric(df_latest[qty_col], errors='coerce') < 0][metric_col].sum()
-                        returns_prev = df_previous[pd.to_numeric(df_previous[qty_col], errors='coerce') < 0][metric_col].sum()
-                        returns_change = abs(returns_latest) - abs(returns_prev)
-                        if total_change != 0 and returns_change != 0:
-                            impact = (returns_change / abs(total_change)) * 100
-                            drivers.append({
-                                'driver': 'Returns Impact',
-                                'contribution_percent': round(abs(impact), 1),
-                                'group_name': f'Returns changed by ${abs(returns_change):,.0f}',
-                                'direction': 'negative' if returns_change > 0 else 'positive'
-                            })
-
-                    # ── Driver 4: UnitPrice variance ──
-                    if price_col and price_col in df.columns:
-                        avg_price_latest = pd.to_numeric(df_latest[price_col], errors='coerce').mean()
-                        avg_price_prev = pd.to_numeric(df_previous[price_col], errors='coerce').mean()
-                        if avg_price_prev > 0:
-                            price_change_pct = ((avg_price_latest - avg_price_prev) / avg_price_prev) * 100
-                            if abs(price_change_pct) > 1:
-                                drivers.append({
-                                    'driver': 'Unit Price Variance',
-                                    'contribution_percent': round(abs(price_change_pct), 1),
-                                    'group_name': f'Avg price {"increased" if price_change_pct > 0 else "decreased"} by {abs(price_change_pct):.1f}%',
-                                    'direction': 'positive' if price_change_pct > 0 else 'negative'
-                                })
-
-                    # Sort by impact and take top 5
-                    drivers = sorted(drivers, key=lambda x: x.get('contribution_percent', 0), reverse=True)[:5]
-
-                    # Generate insight summary
-                    primary = drivers[0] if drivers else None
-                    if total_previous > 0:
-                        rev_change_pct = ((total_latest - total_previous) / abs(total_previous)) * 100
-                    else:
-                        rev_change_pct = 0
-
-                    insight = (
-                        f"Revenue {'increased' if total_change >= 0 else 'decreased'} by "
-                        f"${abs(total_change):,.0f} ({rev_change_pct:+.1f}%) from {previous} to {latest}."
-                    )
-                    if primary:
-                        insight += f" Primary driver: {primary['driver']} ({primary['contribution_percent']:.1f}% impact)."
-
-                    return {
-                        'metric': metric_col,
-                        'current_value': float(total_latest),
-                        'previous_value': float(total_previous),
-                        'kpi_change_percent': round(rev_change_pct, 1),
-                        'top_drivers': drivers,
-                        'total_insights': len(drivers),
-                        'insight_summary': insight,
-                        'recommendations': _generate_recommendations(drivers, rev_change_pct),
-                        'period': {'latest': str(latest), 'previous': str(previous)}
-                    }
-            except Exception as e:
-                logger.warning(f"MoM analysis failed, falling back: {e}")
-
-        # ── Fallback: Static group analysis (no time data) ──
-        return _static_group_analysis(df, metric_col, group_cols)
+        return {
+            'metric': metric_col,
+            'current_value': float(val_latest),
+            'previous_value': float(val_prev),
+            'kpi_change_percent': round(change_pct, 1),
+            'top_drivers': final_drivers,
+            'insight_summary': insight_summary,
+            'recommendations': recommendations,
+            'ai_generated': ai_narrative
+        }
 
     except Exception as e:
         logger.error(f"Root cause error: {e}")
@@ -169,39 +211,8 @@ def _compare_by_group(
     total_change: float,
     top_n: int = 5
 ) -> List[Dict]:
-    """Compare a grouping column between two periods."""
-    drivers = []
-    try:
-        latest_by = df_latest.groupby(group_col)[metric_col].sum()
-        prev_by = df_prev.groupby(group_col)[metric_col].sum()
-        all_groups = set(latest_by.index) | set(prev_by.index)
-
-        changes = []
-        for g in all_groups:
-            cur = latest_by.get(g, 0)
-            prev = prev_by.get(g, 0)
-            change = cur - prev
-            changes.append((g, change, cur))
-
-        changes.sort(key=lambda x: abs(x[1]), reverse=True)
-
-        for group_name, change, current in changes[:top_n]:
-            if total_change != 0 and change != 0:
-                impact = (change / abs(total_change)) * 100
-                total_rev = df_latest[metric_col].sum()
-                contribution = (current / total_rev * 100) if total_rev > 0 else 0
-
-                drivers.append({
-                    'driver': f"{group_col}: {group_name}",
-                    'contribution_percent': round(abs(impact), 1),
-                    'group_name': (
-                        f"{group_name} contributes {contribution:.0f}% of total revenue"
-                    ),
-                    'direction': 'positive' if change > 0 else 'negative'
-                })
-    except Exception:
-        pass
-    return drivers
+    """Legacy function - unused."""
+    return []
 
 
 def _static_group_analysis(df, metric_col, group_cols):
