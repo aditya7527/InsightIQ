@@ -25,6 +25,9 @@ class Settings(BaseSettings):
         if not value:
             return "sqlite:///./insightiq.db"
         
+        if isinstance(value, str):
+            value = value.strip()
+            
         # If user just pasted the hostname like 'trolley.proxy.rlwy.net'
         if "://" not in value:
             # We can't know the password, so we must error but with a better message
