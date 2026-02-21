@@ -11,6 +11,6 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY app ./app
 COPY .env.example ./.env.example
 
-EXPOSE 8001
-
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8001"]
+# EXPOSE is mostly documentation, but we can leave it or remove it. 
+# Railway will use the PORT env var.
+CMD ["sh", "-c", "uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8001}"]
