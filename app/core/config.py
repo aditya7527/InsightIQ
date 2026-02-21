@@ -19,6 +19,22 @@ class Settings(BaseSettings):
     app_host: str = "0.0.0.0"
     app_port: int = 8001
 
+    @field_validator("database_url", mode="before")
+    @classmethod
+    def validate_db_url(cls, value):
+        if not value:
+            return "sqlite:///./insightiq.db"
+        
+        # If user just pasted the hostname like 'trolley.proxy.rlwy.net'
+        if "://" not in value:
+            # We can't know the password, so we must error but with a better message
+            raise ValueError(
+                f"Invalid DATABASE_URL: '{value}'. "
+                "It must start with 'postgresql://' or 'sqlite:///'. "
+                "In Railway, copy the FULL 'DATABASE_URL' from the Variables tab, not just the hostname."
+            )
+        return value
+
     @field_validator("cors_origins", mode="before")
     @classmethod
     def parse_cors_origins(cls, value):
