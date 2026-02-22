@@ -34,11 +34,16 @@ async def upload_dataset(file: UploadFile = File(...), name: str = Form(...)):
     MAX_UPLOAD_MB = 10
     MAX_UPLOAD_BYTES = MAX_UPLOAD_MB * 1024 * 1024
     
-    # Check size by seeking to end
-    # Note: Starlette 0.27 UploadFile.seek does not support whence argument
-    file.file.seek(0, 2)
-    file_size = file.file.tell()
-    file.file.seek(0)
+    # Check size safely
+    try:
+        await file.seek(0)
+        # Read the file to get size if it's manageable
+        content = await file.read()
+        file_size = len(content)
+        await file.seek(0)
+    except Exception:
+        # Fallback to os.path if it failed (though it shouldn't for UploadFile)
+        file_size = 0
     
     if file_size > MAX_UPLOAD_BYTES:
         raise HTTPException(

@@ -290,8 +290,8 @@ def forecast_endpoint(request: ForecastRequest):
         df = _try_compute_revenue(df)
         
         # Identify columns
-        revenue_col = 'Revenue' if 'Revenue' in df.columns else auto_detect_revenue_column(df)
-        date_col = auto_detect_date_column(df)
+        date_col = detect_date_column(df)
+        revenue_col = detect_revenue_column(df)
         
         if not revenue_col or not date_col:
              return {
@@ -380,8 +380,8 @@ def get_cohort_analysis(table_name: str):
         df = _try_compute_revenue(df)
         
         # We need date_col and revenue_col
-        date_col = auto_detect_date_column(df)
-        revenue_col = 'Revenue' if 'Revenue' in df.columns else auto_detect_revenue_column(df)
+        date_col = detect_date_column(df)
+        revenue_col = detect_revenue_column(df)
         
         if not date_col or not revenue_col:
             return {"status": "insufficient_data", "message": "Could not identify Date or Revenue columns."}
