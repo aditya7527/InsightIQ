@@ -26,6 +26,7 @@ Thumbs.db
 
 # Test/debug files
 test_*.csv
+test_sales.csv
 test_*.html
 upload*.json
 upload_resp.txt
