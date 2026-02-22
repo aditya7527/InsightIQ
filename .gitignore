@@ -9,7 +9,6 @@ node_modules/
 
 # Database files
 *.db
-!insightiq.db
 *.sqlite3
 
 # Uploaded data

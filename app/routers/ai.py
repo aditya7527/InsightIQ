@@ -305,7 +305,9 @@ def forecast_endpoint(request: ForecastRequest):
         return result
 
     except Exception as e:
-        logger.error(f"Forecast endpoint error: {e}")
+        import traceback
+        error_trace = traceback.format_exc()
+        logger.error(f"Forecast endpoint error: {e}\n{error_trace}")
         return {
             'success': False,
             'forecast': [],

@@ -65,7 +65,12 @@ def generate_forecast(
 
     # ── Step 2: extract monthly series ────────────────────────────────────────
     ts: pd.Series = get_monthly_series_from_result(rev_result)
-    ts.index = pd.DatetimeIndex(ts.index, freq="MS")
+    if ts.empty:
+        return _invalid_response([], currency, "No monthly revenue data found.")
+
+    # Properly align index to Month Start and ensure frequency is set
+    ts.index = pd.to_datetime(ts.index)
+    ts = ts.asfreq("MS").fillna(0)
 
     n = len(ts)
     mean_rev = float(ts.mean())
@@ -78,10 +83,10 @@ def generate_forecast(
     # ── Step 3: Reliability Gates ──────────────────────────────────────────────
     historical_list = [{"date": str(idx.date()), "value": float(val)} for idx, val in ts.items()]
 
-    if n < 12:
+    if n < 8: # Reduced from 12 to 8 to be more lenient for newer datasets
         return _invalid_response(historical_list, currency, "Forecast not reliable due to insufficient data points.")
-    if cv > 1.2:
-        return _invalid_response(historical_list, currency, "Forecast not reliable due to high volatility.")
+    if cv > 2.0: # Increased from 1.2 to 2.0 to handle more volatile datasets
+        return _invalid_response(historical_list, currency, "Forecast not reliable due to extreme volatility.")
 
     # ── Step 4: Hierarchical Model Selection ──────────────────────────────────
     model_used = "none"
@@ -99,18 +104,21 @@ def generate_forecast(
             model = SARIMAX(ts, order=(1, 1, 1), seasonal_order=(1, 1, 1, s),
                             enforce_stationarity=False, enforce_invertibility=False)
             results = model.fit(disp=False)
-            y_pred = results.fittedvalues
-            metric_r2 = r2_score(ts, y_pred)
+            y_pred = results.fittedvalues.fillna(0)
+            
+            # Ensure no NaNs or Infs in y_pred before R2
+            if not np.any(np.isnan(y_pred)) and not np.any(np.isinf(y_pred)):
+                metric_r2 = r2_score(ts, y_pred)
 
-            if metric_r2 >= 0:
-                model_used = "sarimax"
-                f_res = results.get_forecast(steps=periods)
-                forecast_values = f_res.predicted_mean
-                ci = f_res.conf_int()
-                conf_int_lower = ci.iloc[:, 0].tolist()
-                conf_int_upper = ci.iloc[:, 1].tolist()
-                metric_mae = mean_absolute_error(ts, y_pred)
-                metric_mape = float(np.mean(np.abs((ts - y_pred) / ts.replace(0, 1))) * 100)
+                if metric_r2 >= 0:
+                    model_used = "sarimax"
+                    f_res = results.get_forecast(steps=periods)
+                    forecast_values = f_res.predicted_mean.fillna(0)
+                    ci = f_res.conf_int().fillna(0)
+                    conf_int_lower = ci.iloc[:, 0].tolist()
+                    conf_int_upper = ci.iloc[:, 1].tolist()
+                    metric_mae = mean_absolute_error(ts, y_pred)
+                    metric_mape = float(np.mean(np.abs((ts - y_pred) / ts.replace(0, 1))) * 100)
         except Exception as e:
             logger.warning("SARIMAX fit failed: %s", e)
 
@@ -124,21 +132,23 @@ def generate_forecast(
                 seasonal_periods=s if seasonal_type else None
             )
             hw_results = hw_model.fit()
-            y_pred = hw_results.fittedvalues
-            metric_r2 = r2_score(ts, y_pred)
-            model_used = "holt_winters"
-            forecast_values = hw_results.forecast(periods)
-            resid_std = float((ts - y_pred).std())
-            conf_int_lower = (forecast_values - 1.96 * resid_std).tolist()
-            conf_int_upper = (forecast_values + 1.96 * resid_std).tolist()
-            metric_mae = mean_absolute_error(ts, y_pred)
-            metric_mape = float(np.mean(np.abs((ts - y_pred) / ts.replace(0, 1))) * 100)
+            y_pred = hw_results.fittedvalues.fillna(0)
+            
+            if not np.any(np.isnan(y_pred)) and not np.any(np.isinf(y_pred)):
+                metric_r2 = r2_score(ts, y_pred)
+                model_used = "holt_winters"
+                forecast_values = hw_results.forecast(periods).fillna(0)
+                resid_std = float((ts - y_pred).std())
+                conf_int_lower = (forecast_values - 1.96 * resid_std).tolist()
+                conf_int_upper = (forecast_values + 1.96 * resid_std).tolist()
+                metric_mae = mean_absolute_error(ts, y_pred)
+                metric_mape = float(np.mean(np.abs((ts - y_pred) / ts.replace(0, 1))) * 100)
         except Exception as e:
             logger.error("Holt-Winters failed: %s", e)
-            return _error_response(currency, "Forecasting models failed due to extreme data variance.")
+            return _error_response(currency, "Forecasting models failed due to data variance.")
 
     # ── Gate 2: R² < 0 → invalid ──────────────────────────────────────────────
-    if metric_r2 < 0:
+    if metric_r2 < 0 or np.isnan(metric_r2):
         return _invalid_response(
             historical_list, currency,
             "Forecast not reliable due to poor model fit (R² < 0)."
