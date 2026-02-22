@@ -5,17 +5,8 @@ import pandas as pd
 import logging
 
 from app.core.globals import _datasets
-from app.services.profiling import profile_dataset
-from app.services.confidence_score import calculate_confidence_score, calculate_confidence_score_from_revenue
 from app.services.industry_detection import detect_industry, get_industry_context
-from app.forecasting.models import (
-    auto_detect_date_column,
-    auto_detect_revenue_column,
-    forecast_monthly_revenue,
-    forecast_linear,
-    forecast_exponential_smoothing
-)
-from app.services.root_cause_analysis import analyze_root_causes, detect_anomalies
+from app.services.root_cause_analysis import analyze_root_causes
 from app.ai.conversational import ask_question
 from app.ai.gpt_service import query_gpt
 from app.services.analytics import run_sql
