@@ -3,9 +3,13 @@
 __pycache__/
 *.pyc
 .pytest_cache/
+.venv/
+venv/
+node_modules/
 
 # Database files
 *.db
+!insightiq.db
 *.sqlite3
 
 # Uploaded data
@@ -15,7 +19,6 @@ data/uploads/
 .vscode/
 .idea/
 *.swp
-frontend/node_modules/
 
 # OS
 Thumbs.db
@@ -29,7 +32,18 @@ upload_resp.txt
 report*.pdf
 execution_log.txt
 local_data.db
+*.csv
+!test_sales.csv
+
+# Logs and temp files
+*.log
+*.txt
+!requirements.txt
+!runtime.txt
+!DEPLOY.md
+!Procfile
 
 # Gemini/Agent metadata
 .gemini/
 .agent/
+.agents/

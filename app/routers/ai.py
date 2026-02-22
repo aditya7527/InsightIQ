@@ -6,7 +6,7 @@ import logging
 
 from app.core.globals import _datasets
 from app.services.profiling import profile_dataset
-from app.services.confidence_score import calculate_confidence_score
+from app.services.confidence_score import calculate_confidence_score, calculate_confidence_score_from_revenue
 from app.services.industry_detection import detect_industry, get_industry_context
 from app.forecasting.models import (
     auto_detect_date_column,
@@ -54,44 +54,91 @@ def _get_df(table_name: str) -> pd.DataFrame:
     return df
 
 
-def _compute_revenue(df: pd.DataFrame) -> pd.DataFrame:
-    """Compute Revenue = Quantity × UnitPrice if columns exist."""
-    df = df.copy()
-    qty_col = _find(df, ['quantity', 'qty'])
-    price_col = _find(df, ['unitprice', 'unit_price', 'price'])
-    if qty_col and price_col and 'Revenue' not in df.columns:
-        df['Revenue'] = pd.to_numeric(df[qty_col], errors='coerce').fillna(0) * \
-                        pd.to_numeric(df[price_col], errors='coerce').fillna(0)
-    return df
+# Revenue computation delegated to revenue_engine to avoid duplicate logic
+# DO NOT COMPUTE REVENUE OUTSIDE revenue_engine.py
+from app.services.revenue_engine import (
+    _try_compute_revenue,
+    compute_monthly_revenue,
+    detect_date_column,
+    detect_revenue_column,
+    get_monthly_series_from_result
+)
+from app.services.forecasting_service import generate_forecast
+from app.services.root_cause_analysis import analyze_root_causes
+from app.services.trust_engine import compute_trust_index
 
 
-def _find(df, patterns):
-    for col in df.columns:
-        cleaned = col.lower().replace('_', '').replace(' ', '')
-        for p in patterns:
-            if cleaned == p.replace('_', ''):
-                return col
-    return None
 
-
-# ========== CONFIDENCE SCORE ==========
+# ========== CONFIDENCE SCORE (Data-Driven Integrity) ==========
 @router.get("/confidence/{table_name}")
 def get_confidence_score(table_name: str):
     try:
         df = _get_df(table_name)
-        profile = profile_dataset(df)
-        column_stats = profile['column_stats']
-        confidence, quality = calculate_confidence_score(df, column_stats)
+        df = _try_compute_revenue(df)
+        
+        date_col = detect_date_column(df)
+        rev_col  = detect_revenue_column(df)
+        
+        trust_res = {
+            "trust_score": 0.0,
+            "trust_label": "Insufficient Data"
+        }
+        
+        integrity_score, integrity_quality, penalty_reasons = 0, "Unknown", []
+        
+        if date_col and rev_col:
+            try:
+                # 1. Base revenue
+                rev_result = compute_monthly_revenue(df, date_col, rev_col)
+                monthly_series = get_monthly_series_from_result(rev_result)
+                volatility_cv = rev_result.get("volatility", {}).get("cv", 1.0)
+                
+                # 2. Forecast Output
+                import logging
+                logger.info("Computing trust index forecast data...")
+                forecast_data = generate_forecast(df, rev_col, date_col, periods=3, rev_result=rev_result)
+                model_metrics = forecast_data.get("metrics", {})
+                
+                # 3. Significance Result
+                # analyze_root_causes requires df, metric_col, group_cols
+                logger.info("Computing trust index root cause data...")
+                rca_data = analyze_root_causes(df, rev_col, None, rev_result=rev_result)
+                significance_result = {
+                    "p_value": rca_data.get("p_value", 1.0),
+                    "is_significant": rca_data.get("is_significant", False)
+                }
+                
+                # Compute composite trust
+                trust_res = compute_trust_index(
+                    df=df,
+                    monthly_series=monthly_series,
+                    model_metrics=model_metrics,
+                    significance_result=significance_result,
+                    volatility_cv=volatility_cv
+                )
+                
+            except Exception as e:
+                import traceback
+                logger.warning("Trust Engine error: %s\n%s", e, traceback.format_exc())
+                pass
+
         return {
-            "confidence_score": confidence,
-            "confidence_score_quality": quality,
+            "trust_score": trust_res["trust_score"],
+            "trust_label": trust_res["trust_label"],
+            "components": trust_res.get("components", []),
+            "limiting_factor": trust_res.get("limiting_factor", ""),
+            "explanation": trust_res.get("explanation", ""),
+            "confidence_score": int(trust_res["trust_score"] * 100),
+            "confidence_score_quality": trust_res["trust_label"],
             "table_name": table_name,
             "rows_analyzed": len(df),
-            "columns": len(df.columns)
+            "columns": len(df.columns),
         }
+    except HTTPException:
+        raise
     except Exception as e:
-        logger.error(f"Confidence score error: {e}")
-        raise HTTPException(status_code=400, detail=str(e))
+        logger.error("Confidence score error: %s", e)
+        raise HTTPException(status_code=500, detail="Could not compute integrity score.")
 
 
 # ========== INDUSTRY DETECTION ==========
@@ -115,10 +162,15 @@ def detect_industry_endpoint(table_name: str):
 def get_summary(table_name: str):
     try:
         df = _get_df(table_name)
-        df = _compute_revenue(df)
+        df = _try_compute_revenue(df)
 
         industry, _ = detect_industry(df, df.columns.tolist())
-        profile = profile_dataset(df)
+
+        try:
+            profile = profile_dataset(df)
+        except Exception as prof_err:
+            logger.warning("profile_dataset failed in summary: %s", prof_err)
+            profile = {'computed_metrics': []}
 
         # Build computed summary (always works, no GPT needed)
         metrics = profile.get('computed_metrics', [])
@@ -132,12 +184,15 @@ def get_summary(table_name: str):
             f"Industry detected: {industry}."
         )
         if revenue_metric:
+            from app.utils.file_processing import detect_currency, format_currency
             rev_val = revenue_metric['value']
-            summary_lines.append(
-                f"Total Revenue: ${rev_val:,.0f}."
-            )
+            currency = detect_currency(df)
+            rev_formatted = format_currency(rev_val, currency)
+            summary_lines.append(f"Total Revenue: {rev_formatted}.")
         if aov_metric:
-            summary_lines.append(f"Average Order Value: ${aov_metric['value']:,.2f}.")
+            from app.utils.file_processing import detect_currency, format_currency
+            currency = detect_currency(df)
+            summary_lines.append(f"Average Order Value: {format_currency(aov_metric['value'], currency)}.")
         if customers_metric:
             summary_lines.append(f"Active Customers: {int(customers_metric['value']):,}.")
 
@@ -161,7 +216,8 @@ def get_summary(table_name: str):
             end = gpt_text.rfind('}') + 1
             if start != -1 and end > start:
                 gpt_data = json.loads(gpt_text[start:end])
-                return gpt_data
+                if "error" not in gpt_data:
+                    return gpt_data
         except Exception:
             pass
 
@@ -170,9 +226,12 @@ def get_summary(table_name: str):
             "next_steps": next_steps
         }
 
+    except HTTPException:
+        raise
     except Exception as e:
-        logger.error(f"Summary error: {e}")
-        raise HTTPException(status_code=400, detail=str(e))
+        import traceback
+        logger.error("Summary endpoint error: %s\n%s", e, traceback.format_exc())
+        raise HTTPException(status_code=500, detail="Executive summary generation failed. Please try again.")
 
 
 # ========== ROOT CAUSE ANALYSIS ==========
@@ -181,41 +240,49 @@ def analyze_root_cause(request: RootCauseRequest):
     """Analyze root causes of revenue changes — normalized and thresholded."""
     try:
         df = _get_df(request.table_name)
-        df = _compute_revenue(df)
+        df = _try_compute_revenue(df)
 
-        # Use Revenue as primary metric
-        metric_column = 'Revenue' if 'Revenue' in df.columns else request.metric_column
+        # Detect metric column — prefer Revenue, then use request, then auto-detect
+        if 'Revenue' in df.columns:
+            metric_column = 'Revenue'
+        elif request.metric_column and request.metric_column in df.columns:
+            metric_column = request.metric_column
+        else:
+            metric_column = detect_revenue_column(df)
+
         if not metric_column:
-             metric_column = auto_detect_revenue_column(df)
-        
-        if not metric_column:
-             return {
-                 'metric': 'unknown',
-                 'top_drivers': [],
-                 'insight_summary': 'No numeric metric column found.',
-                 'recommendations': []
-             }
+            return {
+                'current_period': None, 'previous_period': None,
+                'current_value': 0, 'previous_value': None,
+                'change_percent': None, 'top_drivers': [],
+                'insight_summary': 'No numeric revenue column found.',
+                'recommendations': ['Upload a dataset with a Sales, Revenue or Amount column.']
+            }
 
         group_cols = request.group_by
         if group_cols:
             group_cols = [c for c in group_cols if c in df.columns]
 
-        # Call updated strict analysis
         analysis = analyze_root_causes(df, metric_column, group_cols)
-        
+
         # Add anomalies
-        anomalies = detect_anomalies(df, metric_column)
-        analysis['anomalies'] = anomalies[:5]
+        try:
+            anomalies = detect_anomalies(df, metric_column)
+            analysis['anomalies'] = anomalies[:5]
+        except Exception:
+            analysis['anomalies'] = []
 
         return analysis
 
     except Exception as e:
-        logger.error(f"Root cause error: {e}")
+        import traceback
+        logger.error("Root cause error: %s\n%s", e, traceback.format_exc())
         return {
-            'metric': request.metric_column or 'Revenue',
-            'top_drivers': [],
-            'insight_summary': f'Analysis error: {str(e)}',
-            'recommendations': []
+            'current_period': None, 'previous_period': None,
+            'current_value': 0, 'previous_value': None,
+            'change_percent': None, 'top_drivers': [],
+            'insight_summary': 'Root cause analysis encountered a data processing error. Ensure your dataset has date and revenue columns.',
+            'recommendations': ['Check that your dataset has a valid date column and numeric revenue column.']
         }
 
 
@@ -229,7 +296,7 @@ def forecast_endpoint(request: ForecastRequest):
         from app.services.forecasting_service import generate_forecast
         
         df = _get_df(request.table_name)
-        df = _compute_revenue(df)
+        df = _try_compute_revenue(df)
         
         # Identify columns
         revenue_col = 'Revenue' if 'Revenue' in df.columns else auto_detect_revenue_column(df)
@@ -252,7 +319,7 @@ def forecast_endpoint(request: ForecastRequest):
             'success': False,
             'forecast': [],
             'historical': [],
-            'message': str(e)
+            'message': "Forecast failed due to internal error."
         }
 
 
@@ -268,7 +335,7 @@ def summary_deterministic(request: RootCauseRequest):
         from app.services.narrative_service import generate_summary as gen_narrative
         
         df = _get_df(request.table_name)
-        df = _compute_revenue(df)
+        df = _try_compute_revenue(df)
         
         revenue_col = 'Revenue' if 'Revenue' in df.columns else auto_detect_revenue_column(df)
         date_col = auto_detect_date_column(df)
@@ -288,7 +355,7 @@ def summary_deterministic(request: RootCauseRequest):
 
     except Exception as e:
         logger.error(f"Narrative error: {e}")
-        return {"summary": "Error generating narrative.", "error": str(e)}
+        return {"summary": "Error generating narrative.", "error": "Internal error."}
 
 
 # ========== ASK YOUR DATA ==========
@@ -298,13 +365,37 @@ async def ask_data_endpoint(request: AskRequest):
         df = _get_df(request.table_name)
         column_names = df.columns.tolist()
 
-        result = await ask_question(request.question, request.table_name, column_names, engine)
+        result = await ask_question(request.question, request.table_name, df)
         return result
 
     except Exception as e:
         logger.error(f"Ask question error: {e}")
         return {
             "success": False,
-            "error": str(e),
+            "error": "Failed to process question due to internal data error.",
             "question": request.question
         }
+
+
+# ========== COHORT ANALYSIS ==========
+@router.get("/cohort/{table_name}")
+def get_cohort_analysis(table_name: str):
+    """Compute structural customer cohort retention matrices."""
+    try:
+        from app.services.cohort_service import compute_cohort_retention
+        df = _get_df(table_name)
+        df = _try_compute_revenue(df)
+        
+        # We need date_col and revenue_col
+        date_col = auto_detect_date_column(df)
+        revenue_col = 'Revenue' if 'Revenue' in df.columns else auto_detect_revenue_column(df)
+        
+        if not date_col or not revenue_col:
+            return {"status": "insufficient_data", "message": "Could not identify Date or Revenue columns."}
+            
+        result = compute_cohort_retention(df, date_col, revenue_col)
+        return result
+        
+    except Exception as e:
+        logger.error(f"Cohort generation error: {e}")
+        return {"status": "error", "message": "Failed to generate cohort retention matrix."}

@@ -51,9 +51,17 @@ function formatNumber(n) {
   if (Math.abs(n) >= 1_000) return (n / 1_000).toFixed(1) + 'K';
   return n.toLocaleString();
 }
+function getCurrencySymbol() {
+  const map = { 'USD': '$', 'EUR': '€', 'GBP': '£', 'INR': '₹', 'JPY': '¥' };
+  if (currentDataset && currentDataset.schema && currentDataset.schema.currency) {
+    return map[currentDataset.schema.currency] || '$';
+  }
+  return '$';
+}
+
 function formatCurrency(n) {
   if (n == null) return '—';
-  return '$' + formatNumber(n);
+  return getCurrencySymbol() + formatNumber(n);
 }
 function formatUnits(n) {
   if (n == null) return '—';
@@ -72,23 +80,45 @@ function fmtMetric(m) {
 }
 function show(id) { const el = document.getElementById(id); if (el) el.classList.remove('hidden'); }
 function switchToSection(sectionId, clickedLink) {
-  console.log('switchToSection called:', sectionId);
-  // Hide all content sections
-  document.querySelectorAll('.content-section').forEach(sec => sec.classList.remove('active'));
-  // Show target section
+  console.log('[SPA] Switching to:', sectionId);
+
+  // 1. Reset all sections aggressively
+  const container = document.getElementById('spa-container');
+  if (container) {
+    const children = container.children;
+    for (let i = 0; i < children.length; i++) {
+      const child = children[i];
+      child.classList.remove('active');
+      child.style.setProperty('display', 'none', 'important');
+      child.style.setProperty('visibility', 'hidden', 'important');
+      child.style.setProperty('opacity', '0', 'important');
+      child.style.setProperty('position', 'absolute', 'important');
+    }
+  }
+
+  // 2. Show the intended section
   const target = document.getElementById(sectionId);
   if (target) {
     target.classList.add('active');
+    target.style.setProperty('display', 'block', 'important');
+    target.style.setProperty('visibility', 'visible', 'important');
+    target.style.setProperty('opacity', '1', 'important');
+    target.style.setProperty('position', 'relative', 'important');
+    window.scrollTo({ top: 0, behavior: 'smooth' });
   } else {
-    console.warn('Section not found:', sectionId);
+    console.error('[SPA] Section NOT FOUND:', sectionId);
     return;
   }
-  // Update sidebar highlight
+
+  // 3. Update Sidebar links
   document.querySelectorAll('.sidebar-link').forEach(l => l.classList.remove('active'));
   if (clickedLink) {
     clickedLink.classList.add('active');
+  } else {
+    const fallbackLink = document.querySelector(`.sidebar-link[onclick*="${sectionId}"]`);
+    if (fallbackLink) fallbackLink.classList.add('active');
   }
-  // Populate visualizations on demand
+  // 4. Handle specific section logic
   if (sectionId === 'visualizations-section' && window._lastAnalyticsData) {
     populateVisualizationsSection(window._lastAnalyticsData);
   }
@@ -111,7 +141,7 @@ async function handleFormSubmit(e) {
       const errorData = await res.json();
       console.log('Error Data:', errorData);
       const errorMessage = errorData.detail || 'Upload failed: ' + res.status;
-      alert('Server Error: ' + errorMessage);
+      alert('Upload failed. Please ensure the file is a valid CSV or Excel document.');
       throw new Error(errorMessage);
     }
     const data = await res.json();
@@ -120,7 +150,7 @@ async function handleFormSubmit(e) {
     document.getElementById('dashboard').style.display = 'block';
     await loadDashboard();
   } catch (err) {
-    status.textContent = 'Error: ' + err.message;
+    status.textContent = 'Upload encountered an issue. Please try again.';
     status.style.display = 'block';
   } finally {
     btn.disabled = false;
@@ -253,12 +283,12 @@ function renderMetrics(data) {
 
   // Card 3: Confidence Score
   grid.innerHTML += `
-    <div class="metric-card highlight" id="confidenceCard">
+    <div class="metric-card highlight" id="confidenceCard" style="cursor:pointer;" onclick="openTrustModal()" title="View Analytical Confidence Breakdown">
       <div class="metric-top"><div>
         <div class="metric-label">Confidence Score</div>
         <div class="metric-value" id="confidenceScore" style="font-size:2.2rem;">—</div>
       </div><div class="metric-icon" style="background:rgba(255,255,255,0.15); color:#fff;"><i class="fa-solid fa-shield-check"></i></div></div>
-      <small id="confidenceLabel">Loading...</small>
+      <small id="confidenceLabel">Loading breakdown...</small>
     </div>`;
 }
 
@@ -358,7 +388,7 @@ function generateCharts(data) {
           pointBackgroundColor: '#6366f1', pointBorderColor: '#0f172a', pointBorderWidth: 2
         }]
       },
-      options: timeChartOpts('$')
+      options: timeChartOpts(getCurrencySymbol())
     });
   }
 
@@ -514,18 +544,115 @@ async function loadAllAIFeatures() {
   await safe(loadConfidenceScore);
   await safe(loadIndustryDetection);
   await safe(loadRootCauses);
+  await safe(loadCohortRetention);
   await safe(loadForecasts);
   await safe(loadExecutiveSummary);
 }
 
-/* ---- Confidence Score ---- */
+/* ---- Confidence Score & Trust Transparency ---- */
+let lastTrustData = null;
+
 async function loadConfidenceScore() {
   const res = await fetch(`/api/confidence/${currentDataset.table_name}`);
   if (!res.ok) return;
   const d = await res.json();
-  document.getElementById('confidenceScore').textContent = d.confidence_score + '%';
-  document.getElementById('confidenceLabel').textContent = d.confidence_score_quality;
+  lastTrustData = d;
+  const displayScore = d.trust_score !== undefined ? (d.trust_score * 100).toFixed(0) : (d.confidence_score || 0);
+  const displayLabel = d.trust_label || d.confidence_score_quality || 'Unknown';
+  document.getElementById('confidenceScore').textContent = displayScore + '%';
+  document.getElementById('confidenceLabel').textContent = displayLabel;
 }
+
+function openTrustModal() {
+  const modal = document.getElementById('trustModal');
+  const body = document.getElementById('trustModalBody');
+
+  if (!lastTrustData) {
+    body.innerHTML = '<div style="padding:2rem; text-align:center; color:var(--text-muted);"><i class="fa-solid fa-circle-notch fa-spin"></i> Loading breakdown...</div>';
+    modal.style.display = 'flex';
+    return;
+  }
+
+  const d = lastTrustData;
+  let html = `
+    <div style="text-align:center; margin-bottom:2rem;">
+      <div style="font-size:3.5rem; font-weight:800; color:var(--text-main); line-height:1; letter-spacing:-0.03em;">${(d.trust_score * 100).toFixed(0)}%</div>
+      <div style="font-weight:700; color:var(--text-muted); margin-top:0.75rem; font-size:1rem;">${d.trust_label}</div>
+    </div>
+    
+    <table class="trust-table">
+      <thead>
+        <tr>
+          <th>Analytical Factor</th>
+          <th>Score</th>
+          <th>Weight</th>
+          <th>Impact</th>
+        </tr>
+      </thead>
+      <tbody>
+  `;
+
+  (d.components || []).forEach(c => {
+    const scorePct = (c.score * 100).toFixed(0);
+    const weightPct = (c.weight * 100).toFixed(0);
+    let impactLabel = 'Moderate';
+    let impactClass = 'impact-moderate';
+
+    if (c.score >= 0.85) { impactLabel = 'Strong'; impactClass = 'impact-strong'; }
+    else if (c.score < 0.50) { impactLabel = 'Weak'; impactClass = 'impact-weak'; }
+
+    html += `
+      <tr>
+        <td style="font-weight:600; color:var(--text-main);">${c.name}</td>
+        <td style="font-family:monospace; font-weight:700;">${scorePct}%</td>
+        <td style="color:var(--text-muted); font-size:0.8rem;">${weightPct}%</td>
+        <td><span class="trust-impact-pill ${impactClass}">${impactLabel}</span></td>
+      </tr>
+    `;
+  });
+
+  html += `
+      </tbody>
+    </table>
+    
+    <div style="margin-top:2rem; padding:1.25rem; border-radius:14px; border:1px solid rgba(245,158,11,0.2); background:#fffbeb;">
+      <div style="display:flex; align-items:center; gap:10px; margin-bottom:0.75rem;">
+        <i class="fa-solid fa-circle-info" style="color:var(--amber); font-size:1rem;"></i>
+        <strong style="font-size:0.9rem; color:var(--text-main);">Factor Analysis: ${d.limiting_factor}</strong>
+      </div>
+      <p style="font-size:0.9rem; color:var(--text-gray); margin:0; line-height:1.6;">${d.explanation}</p>
+    </div>
+    
+    <div style="margin-top:2rem;">
+      <h4 style="font-size:0.9rem; font-weight:700; color:var(--text-main); margin-bottom:0.75rem; display:flex; align-items:center; gap:8px;">
+        <i class="fa-solid fa-wrench" style="color:var(--text-muted);"></i>
+        Improvement Signal
+      </h4>
+      <ul style="margin:0; padding-left:1.5rem; font-size:0.85rem; color:var(--text-gray); line-height:1.8;">
+        <li>Increase historical data range to improve seasonal model fit.</li>
+        <li>Review data for outlier transactions that may skew volatility.</li>
+        <li>Segment data into more homogeneous dimensions (e.g., Region, Product Category).</li>
+      </ul>
+    </div>
+  `;
+
+  body.innerHTML = html;
+  modal.style.display = 'flex';
+}
+
+function closeTrustModal() {
+  document.getElementById('trustModal').style.display = 'none';
+}
+
+// Global modal handlers
+window.addEventListener('click', (e) => {
+  const modal = document.getElementById('trustModal');
+  if (e.target === modal) closeTrustModal();
+});
+
+window.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape') closeTrustModal();
+});
 
 /* ---- Industry Detection ---- */
 async function loadIndustryDetection() {
@@ -543,14 +670,25 @@ async function loadIndustryDetection() {
 
 /* ---- Root Cause Analysis ---- */
 async function loadRootCauses() {
-  // Auto-detect columns from schema
   const schema = currentDataset.schema || {};
-  const numCols = Object.keys(schema)
-    .filter(c => schema[c].includes('int') || schema[c].includes('float'));
-  const groupCols = Object.keys(schema)
-    .filter(c => !schema[c].includes('int') && !schema[c].includes('float'))
-    .filter(c => !(/id|no|code/i.test(c)))  // exclude IDs from grouping
-    .slice(0, 2);
+  let numCols = [];
+  let groupCols = [];
+
+  if (schema.numeric_columns && Array.isArray(schema.numeric_columns)) {
+    numCols = schema.numeric_columns;
+  } else if (schema.columns && Array.isArray(schema.columns)) {
+    numCols = schema.columns.filter(c => typeof c.dtype === 'string' && (c.dtype.includes('int') || c.dtype.includes('float'))).map(c => c.name);
+  } else {
+    numCols = Object.keys(schema).filter(c => typeof schema[c] === 'string' && (schema[c].includes('int') || schema[c].includes('float')));
+  }
+
+  if (schema.categorical_columns && Array.isArray(schema.categorical_columns)) {
+    groupCols = schema.categorical_columns.filter(c => !(/id|no|code/i.test(c))).slice(0, 2);
+  } else if (schema.columns && Array.isArray(schema.columns)) {
+    groupCols = schema.columns.filter(c => typeof c.dtype === 'string' && !c.dtype.includes('int') && !c.dtype.includes('float')).map(c => c.name).filter(c => !(/id|no|code/i.test(c))).slice(0, 2);
+  } else {
+    groupCols = Object.keys(schema).filter(c => typeof schema[c] === 'string' && !schema[c].includes('int') && !schema[c].includes('float')).filter(c => !(/id|no|code/i.test(c))).slice(0, 2);
+  }
 
   const body = { table_name: currentDataset.table_name };
   if (numCols.length > 0) body.metric_column = numCols[0];
@@ -571,53 +709,79 @@ async function loadRootCauses() {
   // Show insight summary
   if (d.insight_summary) {
     const isAi = d.ai_generated;
-    const change = d.kpi_change_percent || 0;
+    const change = d.change_percent ?? d.kpi_change_percent ?? 0;
     const direction = change >= 0 ? 'Increase' : 'Decrease';
     const color = change >= 0 ? 'var(--green)' : 'var(--red)';
+    const prevPeriod = d.previous_period || 'Previous Month';
+    const currPeriod = d.current_period || 'Current Month';
+    const prevVal = d.previous_value != null ? (d.previous_value >= 1e6 ? (d.previous_value / 1e6).toFixed(2) + 'M' : d.previous_value >= 1e3 ? (d.previous_value / 1e3).toFixed(1) + 'K' : d.previous_value.toFixed(0)) : null;
+    const currVal = d.current_value != null ? (d.current_value >= 1e6 ? (d.current_value / 1e6).toFixed(2) + 'M' : d.current_value >= 1e3 ? (d.current_value / 1e3).toFixed(1) + 'K' : d.current_value.toFixed(0)) : null;
 
     html += `<div style="margin-bottom:1.5rem;">
       <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:0.8rem;">
-        <p style="color:var(--text-gray); font-size:0.88rem; margin:0;">Comparison: Previous vs Current Period</p>
-        ${isAi ? '<span class="ai-badge" title="Insights generated by AI fallback layer"><i class="fa-solid fa-sparkles"></i> AI Narrative</span>' : ''}
+        <p style="color:var(--text-gray); font-size:0.88rem; margin:0;">Comparing: <strong>${prevPeriod}</strong> → <strong>${currPeriod}</strong>${prevVal && currVal ? ` &nbsp;·&nbsp; ${prevVal} → ${currVal}` : ''}</p>
+        ${isAi ? '<span class="ai-badge" title="Insights generated by AI"><i class="fa-solid fa-sparkles"></i> AI Narrative</span>' : ''}
       </div>
-      <div style="display:flex; align-items:baseline; gap:12px; margin-bottom:1rem;">
-          <div style="font-size:2.4rem; font-weight:800; color:${color};">${change}%</div>
-          <div style="font-size:1rem; font-weight:600; color:var(--text-gray);">${direction} in revenue</div>
+      <div style="display:flex; justify-content:space-between; align-items:flex-start; margin-bottom:1rem;">
+        <div style="display:flex; align-items:baseline; gap:12px; flex-wrap:wrap;">
+            <div style="font-size:2.4rem; font-weight:800; color:${color};">${change >= 0 ? '+' : ''}${change.toFixed(2)}%</div>
+            <div style="font-size:1rem; font-weight:600; color:var(--text-gray); margin-right: 8px;">${direction} in revenue (month-over-month)</div>
+            ${d.is_significant !== undefined ?
+        `<div style="font-size:0.85rem; font-weight:500; color:${d.is_significant ? 'var(--indigo)' : 'var(--text-muted)'}; padding: 4px 8px; border-radius: 4px; border: 1px solid ${d.is_significant ? 'rgba(99,102,241,0.2)' : 'var(--border)'}; background: ${d.is_significant ? 'rgba(99,102,241,0.05)' : '#f8fafc'};">
+                 <i class="${d.is_significant ? 'fa-solid fa-chart-pie' : 'fa-solid fa-circle-minus'}"></i> ` +
+        (d.is_significant ? 'Statistically significant change detected.' : 'Change observed but not statistically significant.') +
+        `</div>`
+        : ''}
+        </div>
+        ${d.anomaly_detected ? `<div style="padding: 6px 12px; background: rgba(239, 68, 68, 0.1); border: 1px solid rgba(239, 68, 68, 0.2); border-radius: 6px; color: var(--red); font-size: 0.85rem; font-weight: 600; text-align: right;"><i class="fa-solid fa-triangle-exclamation"></i> Anomaly Signal Detected<br><span style="font-size: 0.75rem; font-weight: 500;">High Confidence</span></div>` : ''}
       </div>
       <p style="color:var(--text-main); font-size:0.9rem; line-height:1.6; margin:0; font-weight:500;">${d.insight_summary}</p>
     </div>`;
   }
 
-  // Show drivers
+  // Show Waterfall
+  if (d.waterfall && d.waterfall.components && d.waterfall.components.length > 0) {
+    html += `
+      <div style="margin-top:2rem; padding:1.5rem; background:#fff; border-radius:12px; border:1px solid var(--border);">
+        <h3 style="margin:0 0 4px 0; font-size:1.1rem; color:var(--text-main);">Month-over-Month Revenue Bridge</h3>
+        <p style="margin:0 0 1.5rem 0; font-size:0.85rem; color:var(--text-gray);">Breakdown of drivers contributing to revenue change</p>
+        <div id="waterfall-chart-root" style="height:350px;"></div>
+      </div>
+    `;
+  }
+
+  // Show Drivers Grid
   html += '<div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap:12px; margin-top:1.5rem;">';
   if (d.top_drivers && d.top_drivers.length > 0) {
     d.top_drivers.forEach(dr => {
-      const name = dr.name || 'Unknown';
+      const name = dr.value || dr.name || 'Unknown';
       const dim = dr.dimension || 'Factor';
       const pct = dr.normalized_percent != null ? dr.normalized_percent.toFixed(1) : '–';
       const dir = dr.direction || 'positive';
-      const impactRaw = formatCurrency(dr.impact_value);
+      const deltaRaw = dr.delta_value ?? dr.impact_value ?? null;
+      const impactStr = deltaRaw != null ? formatCurrency(deltaRaw) : '—';
 
       const iconClass = dir === 'negative' ? 'fa-arrow-trend-down' : 'fa-chart-line';
       const badgeStyle = dir === 'negative' ? 'background:var(--red-bg); color:var(--red);' : 'background:var(--green-bg); color:var(--green);';
       const iconStyle = dir === 'negative' ? 'background:var(--red-bg); color:var(--red);' : 'background:rgba(99,102,241,0.08); color:var(--accent);';
 
       html += `
-        <div class="driver-card" style="display:flex; align-items:center; padding:12px; border:1px solid var(--border); border-radius:var(--radius-sm); background:white; position:relative;">
-          <div class="driver-icon" style="width:40px; height:40px; border-radius:50%; display:flex; align-items:center; justify-content:center; margin-right:12px; ${iconStyle}">
-            <i class="fa-solid ${iconClass}"></i>
-          </div>
-          <div class="driver-info" style="flex:1;">
-            <div style="display:flex; justify-content:space-between; align-items:start;">
-              <strong style="font-size:0.9rem; color:var(--text-main);">${name}</strong>
-              <span class="driver-badge" style="font-size:0.7rem; padding:2px 6px; border-radius:4px; font-weight:700; ${badgeStyle}">${dir === 'negative' ? '-' : '+'}${pct}%</span>
+          <div class="driver-card" style="display:flex; align-items:center; padding:12px; border:1px solid var(--border); border-radius:var(--radius-sm); background:white; position:relative;">
+            <div class="driver-icon" style="width:40px; height:40px; border-radius:50%; display:flex; align-items:center; justify-content:center; margin-right:12px; ${iconStyle}">
+              <i class="fa-solid ${iconClass}"></i>
             </div>
-            <div style="display:flex; justify-content:space-between; align-items:center; margin-top:4px;">
-              <small style="color:var(--text-muted); font-size:0.75rem;">${dim}</small>
-              <span style="font-size:0.8rem; font-weight:600; color:var(--text-main);">${impactRaw}</span>
+            <div class="driver-info" style="flex:1;">
+              <div style="display:flex; justify-content:space-between; align-items:start;">
+                <strong style="font-size:0.9rem; color:var(--text-main);">${name}</strong>
+                <span class="driver-badge" style="font-size:0.7rem; padding:2px 6px; border-radius:4px; font-weight:700; ${badgeStyle}">${dir === 'negative' ? '-' : '+'}${pct}%</span>
+              </div>
+              <div style="display:flex; justify-content:space-between; align-items:center; margin-top:4px;">
+                <small style="color:var(--text-muted); font-size:0.75rem;">${dim}</small>
+                <span style="font-size:0.8rem; font-weight:600; color:var(--text-main);" title="Highest contribution to month-over-month change">${impactStr}</span>
+              </div>
+              ${dr.contribution !== undefined ? `<div style="margin-top:8px; font-size:0.75rem; color:var(--text-gray); border-top: 1px dotted var(--border); padding-top: 8px;">Driver Strength: <strong style="color:var(--text-main);">${(dr.contribution * 100).toFixed(1)}%</strong> of total change</div>` : ''}
             </div>
-          </div>
-        </div>`;
+          </div>`;
     });
   } else {
     html += '<p style="color:var(--text-muted); grid-column: 1/-1;">No major business drivers identified for this period change.</p>';
@@ -634,6 +798,67 @@ async function loadRootCauses() {
   }
 
   document.getElementById('rootCauseContent').innerHTML = html;
+
+  // Render React Waterfall if available
+  if (d.waterfall && d.waterfall.components && d.waterfall.components.length > 0) {
+    renderWaterfall(d.waterfall);
+  }
+}
+
+function renderWaterfall(w) {
+  const container = document.getElementById('waterfall-chart-root');
+  if (!container) return;
+  const { React, ReactDOM, Recharts } = window;
+  if (!React || !ReactDOM || !Recharts) return;
+  const { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell } = Recharts;
+
+  let currentVal = w.previous_value;
+  const data = [{ name: 'Previous', value: [0, currentVal], color: '#94a3b8' }];
+
+  w.components.forEach(c => {
+    const nextVal = currentVal + c.value;
+    const start = Math.min(currentVal, nextVal);
+    const end = Math.max(currentVal, nextVal);
+    let labelParts = (c.label || '').split(':');
+    let shortName = labelParts.length > 1 ? labelParts[1].trim() : c.label;
+    if (shortName.length > 12) shortName = shortName.substring(0, 10) + '..';
+
+    data.push({
+      name: shortName,
+      value: [start, end],
+      color: c.direction === 'positive' ? '#10b981' : '#ef4444',
+      raw: c.value
+    });
+    currentVal = nextVal;
+  });
+  data.push({ name: 'Current', value: [0, w.current_value], color: '#6366f1' });
+
+  const CustomTooltip = ({ active, payload, label }) => {
+    if (active && payload && payload.length) {
+      const p = payload[0].payload;
+      return React.createElement('div', { style: { background: '#fff', padding: '8px 12px', border: '1px solid #e2e8f0', borderRadius: '6px', fontSize: '12px' } },
+        React.createElement('strong', { style: { display: 'block', marginBottom: '4px' } }, label),
+        React.createElement('span', { style: { color: p.color, fontWeight: 'bold' } },
+          p.raw !== undefined ? (p.raw > 0 ? '+' : '') + formatCurrency(p.raw) : formatCurrency(p.value[1])
+        )
+      );
+    }
+    return null;
+  };
+
+  const chart = React.createElement(ResponsiveContainer, { width: '100%', height: '100%' },
+    React.createElement(BarChart, { data: data, margin: { top: 20, right: 30, left: 0, bottom: 5 } },
+      React.createElement(CartesianGrid, { strokeDasharray: '3 3', vertical: false, stroke: '#e2e8f0' }),
+      React.createElement(XAxis, { dataKey: 'name', tick: { fontSize: 11, fill: '#64748b' }, axisLine: false, tickLine: false }),
+      React.createElement(YAxis, { tickFormatter: v => formatCurrency(v), tick: { fontSize: 11, fill: '#64748b' }, axisLine: false, tickLine: false }),
+      React.createElement(Tooltip, { content: React.createElement(CustomTooltip, null), cursor: { fill: 'transparent' } }),
+      React.createElement(Bar, { dataKey: 'value', radius: 4 },
+        data.map((entry, index) => React.createElement(Cell, { key: `cell-${index}`, fill: entry.color }))
+      )
+    )
+  );
+
+  ReactDOM.render(chart, container);
 }
 
 /* ---- Forecasting ---- */
@@ -643,18 +868,34 @@ async function loadForecasts() {
     body: JSON.stringify({ table_name: currentDataset.table_name, periods: 3 })
   });
   if (!res.ok) {
-    document.getElementById('forecastSection').classList.add('hidden');
+    const errData = await res.json().catch(() => ({}));
+    document.getElementById('forecastTable').innerHTML = `
+      <div style="padding:14px; background:rgba(245,158,11,0.08); border-radius:10px; border:1px solid rgba(245,158,11,0.15); margin-top:10px;">
+        <p style="color:var(--amber); font-size:0.88rem; margin:0;"><i class="fa-solid fa-triangle-exclamation"></i> ${errData.detail || 'Forecast temporarily unavailable. Please try again.'}</p>
+      </div>`;
     return;
   }
   const d = await res.json();
 
-  // Show message if failed
-  if (!d.success) {
+  // Utility: format using API-provided currency code
+  const apiCurrency = d.currency || 'UNSPECIFIED';
+  const formatWithCurrency = (val) => {
+    const absVal = Math.abs(val);
+    let num;
+    if (absVal >= 1_000_000) num = (val / 1_000_000).toFixed(1) + 'M';
+    else if (absVal >= 1_000) num = (val / 1_000).toFixed(1) + 'K';
+    else num = val.toFixed(2);
+    const sym = { INR: '\u20b9', USD: '$', GBP: '\u00a3', EUR: '\u20ac', UNSPECIFIED: '' }[apiCurrency] || '';
+    return sym ? sym + num : num + (apiCurrency && apiCurrency !== 'UNSPECIFIED' ? ' ' + apiCurrency : '');
+  };
+
+  // Handle invalid or unreliable forecasts
+  if (!d.success || d.status === 'invalid_forecast' || d.status === 'invalid') {
+    if (d.historical && d.historical.length > 0) renderForecastChart(d);
     document.getElementById('forecastTable').innerHTML = `
       <div style="padding:14px; background:rgba(245,158,11,0.08); border-radius:10px; border:1px solid rgba(245,158,11,0.15); margin-top:10px;">
-        <p style="color:var(--amber); font-size:0.88rem; margin:0;"><i class="fa-solid fa-info-circle"></i> ${d.message || 'Forecast unavailable.'}</p>
+        <p style="color:var(--amber); font-size:0.88rem; margin:0;"><i class="fa-solid fa-triangle-exclamation"></i> ${d.error || d.message || 'Forecast not reliable due to high volatility.'}</p>
       </div>`;
-    if (d.historical && d.historical.length > 0) renderForecastChart(d);
     return;
   }
 
@@ -680,28 +921,26 @@ async function loadForecasts() {
   if (d.forecast && d.forecast.length > 0) {
     renderForecastChart(d);
 
-    // Helper for reference-style currency formatting ($4.9M)
+    // Helper for reference-style currency formatting
     const formatRefCurrency = (val) => {
-      if (Math.abs(val) >= 1000000) return '$' + (val / 1000000).toFixed(1) + 'M';
-      if (Math.abs(val) >= 1000) return '$' + (val / 1000).toFixed(1) + 'K';
+      const sym = getCurrencySymbol();
+      if (Math.abs(val) >= 1000000) return sym + (val / 1000000).toFixed(1) + 'M';
+      if (Math.abs(val) >= 1000) return sym + (val / 1000).toFixed(1) + 'K';
       return formatCurrency(val);
     };
 
-    const forecastRows = (d.forecast || []).map(f => {
+    const forecastRows = (d.forecast || []).map((f, index) => {
       const periodLabel = f.period || f.date || 'TBD';
 
-      // Robust lookup: normalize both dates to YYYY-MM-DD to avoid mismatch
-      const normLabel = periodLabel.split(' ')[0];
-      const ci = (d.confidence_intervals || []).find(c => {
-        const ciDate = (c.period || c.date || '').split(' ')[0];
-        return ciDate === normLabel;
-      });
-
       let conf = '—';
-      if (ci && ci.lower !== null && ci.lower !== undefined) {
-        conf = `${formatRefCurrency(ci.lower)} — ${formatRefCurrency(ci.upper)}`;
+      const ciLines = d.confidence_intervals || {};
+      const lower = ciLines.lower ? ciLines.lower[index] : null;
+      const upper = ciLines.upper ? ciLines.upper[index] : null;
+
+      if (lower !== null && lower !== undefined && upper !== null && upper !== undefined) {
+        conf = `${formatWithCurrency(lower)} — ${formatWithCurrency(upper)}`;
       }
-      return `<tr><td><strong>${periodLabel}</strong></td><td>${formatRefCurrency(f.value)}</td><td style="font-size:0.8rem;color:var(--text-muted)">${conf}</td></tr>`;
+      return `<tr><td><strong>${periodLabel}</strong></td><td>${formatWithCurrency(f.value)}</td><td style="font-size:0.8rem;color:var(--text-muted)">${conf}</td></tr>`;
     }).join('');
 
     const sub = document.querySelector('#forecast-section .section-subtitle');
@@ -709,41 +948,156 @@ async function loadForecasts() {
       sub.textContent = 'Projected trend with confidence band';
     }
 
-    document.getElementById('forecastTable').innerHTML = `
-      <table class="forecast-table">
-        <thead><tr><th>PERIOD</th><th>PREDICTED REVENUE</th><th>CONFIDENCE</th></tr></thead>
-        <tbody>${forecastRows}</tbody>
-      </table>
-      <div style="margin-top:12px; display:flex; justify-content:space-between; align-items:center;">
-          <p style="color:var(--text-muted);font-size:0.75rem;">Model R²: <span style="color:var(--text-main); font-weight:600;">${metrics.r2 || '—'}</span> · Method: <span style="color:var(--text-main); font-weight:600;">${metrics.model_used || 'SARIMAX'}</span></p>
-      </div>`;
-  } else if (d.status === 'insufficient_data') {
-    const forecastRows = (d.forecast || []).map((f, i) => {
-      const periodLabel = f.period || f.date || 'TBD';
-      const ci = (d.confidence_intervals || []).find(c => (c.period || c.date) === periodLabel);
-      let conf = '—';
-      if (ci && ci.lower !== null && ci.lower !== undefined) {
-        conf = `${formatCurrency(ci.lower)} — ${formatCurrency(ci.upper)}`;
-      }
-      return `<tr><td><strong>${periodLabel}</strong></td><td>${formatCurrency(f.value)}</td><td style="font-size:0.8rem;color:var(--text-muted)">${conf}</td></tr>`;
-    }).join('');
-
-    const sub = document.querySelector('#forecast-section .section-subtitle');
-    if (sub) {
-      sub.textContent = 'Projected trend with confidence band';
-    }
+    const vol = d.volatility || {};
+    const volScore = vol.cv != null ? vol.cv.toFixed(2) : '—';
+    const volLabel = vol.stability_label || 'Unknown';
+    let volColor = 'var(--text-main)';
+    let volBg = 'rgba(0,0,0,0.03)';
+    if (volLabel.includes('High Stability')) { volColor = 'var(--green)'; volBg = 'var(--green-bg)'; }
+    if (volLabel.includes('Moderate')) { volColor = 'var(--amber)'; volBg = 'rgba(245,158,11,0.12)'; }
+    if (volLabel.includes('Volatility')) { volColor = 'var(--red)'; volBg = 'var(--red-bg)'; }
 
     document.getElementById('forecastTable').innerHTML = `
-      <table class="forecast-table">
-        <thead><tr><th>PERIOD</th><th>PREDICTED REVENUE</th><th>CONFIDENCE</th></tr></thead>
-        <tbody>${forecastRows}</tbody>
-      </table>
-      <div style="margin-top:12px; display:flex; justify-content:space-between; align-items:center;">
-          <p style="color:var(--text-muted);font-size:0.75rem;">Model: <span style="color:var(--text-main); font-weight:600;">${metrics.model_used || 'SARIMAX'}</span> · R²: <span style="color:var(--text-main); font-weight:600;">${metrics.r2 || '—'}</span></p>
+      <div class="forecast-card-wrapper">
+        <table class="forecast-table">
+          <thead><tr><th>PERIOD</th><th>PREDICTED REVENUE</th><th>CONFIDENCE</th></tr></thead>
+          <tbody>${forecastRows}</tbody>
+        </table>
+        <div style="padding: 12px 16px; border-top: 1px solid var(--border); background: #ffffff;">
+            <p style="color:var(--text-muted);font-size:0.75rem;margin:0;">Model R²: <span style="color:var(--text-main); font-weight:600;">${metrics.r2 || '—'}</span> · Method: <span style="color:var(--text-main); font-weight:600;">${metrics.model_used || 'SARIMAX'}</span></p>
+        </div>
+      </div>
+      
+      <!-- Volatility Indicator -->
+      <div style="margin-top:16px; padding:16px; background:#fff; border-radius:12px; border:1px solid var(--border); display:flex; justify-content:space-between; align-items:center;">
+        <div>
+          <h4 style="margin:0; font-size:0.8rem; color:var(--text-gray); font-weight:600; text-transform:uppercase;">Revenue Stability</h4>
+          <div style="display:flex; align-items:baseline; gap:8px;">
+            <p style="margin:4px 0 0 0; font-size:1.15rem; font-weight:700; color:var(--text-main);">CV: ${volScore}</p>
+          </div>
+        </div>
+        <div style="padding:6px 12px; border-radius:6px; background:${volBg}; color:${volColor}; font-weight:600; font-size:0.85rem;">
+          <i class="fa-solid fa-chart-line"></i> ${volLabel}
+        </div>
       </div>`;
-  } else {
-    document.getElementById('forecast-section').classList.add('hidden');
   }
+}
+
+/* ---- Customer Retention (Cohorts) ---- */
+async function loadCohortRetention() {
+  const container = document.getElementById('cohortHeatmapContainer');
+  const summaryBox = document.getElementById('cohortSummaryCards');
+  if (!container) return;
+
+  const res = await fetch(`/api/cohort/${currentDataset.table_name}`);
+  if (!res.ok) {
+    container.innerHTML = '<p style="color:var(--amber); text-align:center;"><i class="fa-solid fa-triangle-exclamation"></i> Cohort retention unavailable.</p>';
+    summaryBox.innerHTML = '';
+    return;
+  }
+  const d = await res.json();
+
+  if (!d || d.status !== 'ok') {
+    container.innerHTML = `<p style="color:var(--amber); text-align:center;">
+        <i class="fa-solid fa-info-circle"></i> 
+        ${d.message || 'Dataset does not support customer-level cohort tracking (requires user ID and sequential dates).'}
+      </p>`;
+    summaryBox.innerHTML = '';
+    return;
+  }
+
+  // Display Confidence Badge
+  const badgeColors = {
+    'High Stability': 'background:var(--green-bg); color:var(--green);',
+    'Moderate Stability': 'background:rgba(245,158,11,0.12); color:var(--amber);',
+    'Low Sample Confidence': 'background:var(--red-bg); color:var(--red);'
+  };
+  const badgeColor = badgeColors[d.confidence] || 'background:rgba(0,0,0,0.05); color:var(--text-main);';
+  const badgeHTML = `<span class="badge" style="font-size:0.75rem; font-weight:700; padding:4px 8px; border-radius:6px; ${badgeColor}">
+    <i class="fa-solid fa-shield-check"></i> &nbsp;${d.confidence}
+  </span>`;
+  const badgeContainer = document.getElementById('cohortConfidenceBadge');
+  if (badgeContainer) badgeContainer.innerHTML = badgeHTML;
+
+  // Build Summaries
+  const sm = d.summary_metrics || {};
+  summaryBox.innerHTML = `
+    <div style="flex:1; background:#f8fafc; border:1px solid var(--border); border-radius:10px; padding:1.2rem;">
+      <h4 style="margin:0; font-size:0.8rem; color:var(--text-gray); font-weight:600; text-transform:uppercase;">Month 1 Retention</h4>
+      <div style="font-size:1.8rem; font-weight:800; color:var(--text-main); margin-top:8px;">${sm.avg_month_1_retention || 0}%</div>
+      <p style="margin:4px 0 0 0; font-size:0.8rem; color:var(--text-muted);">Avg return rate in Month 1</p>
+    </div>
+    <div style="flex:1; background:#f8fafc; border:1px solid var(--border); border-radius:10px; padding:1.2rem;">
+      <h4 style="margin:0; font-size:0.8rem; color:var(--text-gray); font-weight:600; text-transform:uppercase;">Month 3 Retention</h4>
+      <div style="font-size:1.8rem; font-weight:800; color:var(--text-main); margin-top:8px;">${sm.avg_month_3_retention || 0}%</div>
+      <p style="margin:4px 0 0 0; font-size:0.8rem; color:var(--text-muted);">Avg return rate in Month 3</p>
+    </div>
+    <div style="flex:1; background:#f8fafc; border:1px solid var(--border); border-radius:10px; padding:1.2rem;">
+      <h4 style="margin:0; font-size:0.8rem; color:var(--text-gray); font-weight:600; text-transform:uppercase;">Est Customer Lifetime</h4>
+      <div style="font-size:1.8rem; font-weight:800; color:var(--text-main); margin-top:8px;">${sm.avg_lifetime_months || 0} mo</div>
+      <p style="margin:4px 0 0 0; font-size:0.8rem; color:var(--text-muted);">Approximate lifespan</p>
+    </div>
+  `;
+
+  // Draw Heatmap inside container
+  drawCohortHeatmap(d.retention_matrix, d.cohort_sizes, container);
+}
+
+function drawCohortHeatmap(matrix, cohortSizes, container) {
+  if (!matrix || matrix.length === 0) {
+    container.innerHTML = '<p style="color:var(--text-muted);">No cohort retention data to render.</p>';
+    return;
+  }
+
+  // Find max columns
+  let maxColsInd = 0;
+  matrix.forEach(row => {
+    Object.keys(row).forEach(k => {
+      if (k.startsWith('month_')) {
+        let n = parseInt(k.split('_')[1], 10);
+        if (n > maxColsInd) maxColsInd = n;
+      }
+    });
+  });
+
+  let html = '<div style="overflow-x:auto;"><table style="width:100%; border-collapse:separate; border-spacing:3px; font-size:0.85rem; text-align:center;">';
+
+  // Headers
+  html += '<thead><tr>';
+  html += '<th style="text-align:left; color:var(--text-muted); font-weight:600; padding:8px 6px;">Cohort</th>';
+  html += '<th style="text-align:center; color:var(--text-muted); font-weight:600; padding:8px 6px;">Size</th>';
+  for (let i = 0; i <= maxColsInd; i++) {
+    html += `<th style="color:var(--text-muted); font-weight:600; padding:8px 6px;">M${i}</th>`;
+  }
+  html += '</tr></thead><tbody>';
+
+  // Rows
+  matrix.forEach(row => {
+    const size = cohortSizes[row.cohort] || 0;
+    html += `<tr>`;
+    html += `<td style="text-align:left; font-weight:700; color:var(--text-main); padding:8px 6px; white-space:nowrap;">${row.cohort}</td>`;
+    html += `<td style="font-weight:600; color:var(--text-muted); padding:8px 6px; background:#f8fafc; border-radius:4px;">${size}</td>`;
+
+    for (let i = 0; i <= maxColsInd; i++) {
+      const val = row[`month_${i}`];
+      if (val == null) {
+        html += `<td style="padding:8px 6px;"></td>`;
+      } else {
+        // Calculate Background Color based on Percentage
+        // Map 0 to 100 into White to Deep Primary (#4f46e5 / var(--primary) or deep green)
+        // Let's use a nice Indigo scaling gradient:
+        const intensity = val / 100.0;
+        const alpha = Math.max(0.05, intensity * 0.9); // prevent completely white
+        const bg = `rgba(99, 102, 241, ${alpha})`;
+        const color = intensity > 0.5 ? '#ffffff' : 'var(--text-main)';
+        html += `<td style="background:${bg}; color:${color}; font-weight:600; padding:8px 6px; border-radius:4px;">${val.toFixed(1)}%</td>`;
+      }
+    }
+    html += `</tr>`;
+  });
+
+  html += '</tbody></table></div>';
+  container.innerHTML = html;
 }
 
 function renderForecastChart(d) {
@@ -837,10 +1191,17 @@ function renderForecastChart(d) {
   }
 
   // 4. Confidence Intervals
-  if (d.confidence_intervals && d.confidence_intervals.length > 0) {
+  const ciLower = d.confidence_intervals && d.confidence_intervals.lower ? d.confidence_intervals.lower : [];
+  const ciUpper = d.confidence_intervals && d.confidence_intervals.upper ? d.confidence_intervals.upper : [];
+  if (ciLower.length > 0 && ciUpper.length > 0) {
     // Map CI to labels
     const ciMap = new Map();
-    d.confidence_intervals.forEach(ci => ciMap.set(ci.period || ci.date, ci));
+    // Reconstruct into periods from forecast
+    if (d.forecast) {
+      d.forecast.forEach((f, i) => {
+        ciMap.set(f.period || f.date, { upper: ciUpper[i], lower: ciLower[i] });
+      });
+    }
 
     // Also add last historical point as a "zero width" CI to start the band smoothly
     if (d.historical && d.historical.length > 0) {
@@ -848,8 +1209,8 @@ function renderForecastChart(d) {
       ciMap.set(last.date, { upper: last.value, lower: last.value });
     }
 
-    const upperData = allLabels.map(l => ciMap.get(l)?.upper ?? null);
-    const lowerData = allLabels.map(l => ciMap.get(l)?.lower ?? null);
+    const upperData = allLabels.map(l => ciMap.has(l) ? ciMap.get(l).upper : null);
+    const lowerData = allLabels.map(l => ciMap.has(l) ? ciMap.get(l).lower : null);
 
     datasets.push({
       label: 'Upper Bound',
@@ -929,7 +1290,7 @@ function renderForecastChart(d) {
           padding: 10,
           cornerRadius: 8,
           callbacks: {
-            label: (ctx) => `${ctx.dataset.label}: ${formatCurrency(ctx.parsed.y)}`
+            label: (ctx) => `${ctx.dataset.label}: ${formatCurrency(ctx.parsed.y)} `
           }
         }
       },
@@ -964,8 +1325,9 @@ function renderForecastChart(d) {
 async function loadExecutiveSummary() {
   try {
     const res = await fetch(`/api/summary/${currentDataset.table_name}`);
-    if (!res.ok) throw new Error('');
+    if (!res.ok) throw new Error('Summary failed');
     const d = await res.json();
+    if (d.error || d.detail) throw new Error(d.error || d.detail);
     let html = `<p>${(d.summary || 'No summary available.').replace(/\n/g, '<br>')}</p>`;
     if (d.next_steps && d.next_steps.length > 0) {
       html += '<ul style="margin-top:10px; padding-left:18px;">';
@@ -974,7 +1336,8 @@ async function loadExecutiveSummary() {
     }
     document.getElementById('summaryContent').innerHTML = html;
   } catch {
-    document.getElementById('summaryContent').innerHTML = '<p style="color:var(--text-muted);">Executive summary requires OpenAI API key.</p>';
+    document.getElementById('summaryContent').innerHTML =
+      '<p style="color:var(--text-muted);"><i class="fa-solid fa-circle-info"></i> Executive summary is being generated. Please try again in a moment.</p>';
   }
 }
 
@@ -983,6 +1346,10 @@ async function askQuestion() {
   const input = document.getElementById('questionInput');
   const q = input.value.trim();
   if (!q) return;
+  if (!currentDataset || !currentDataset.table_name) {
+    alert('Please upload a dataset first!');
+    return;
+  }
   const chatBox = document.getElementById('chatBox');
 
   const uDiv = document.createElement('div');
@@ -990,6 +1357,12 @@ async function askQuestion() {
   uDiv.textContent = q;
   chatBox.appendChild(uDiv);
   input.value = '';
+  chatBox.scrollTop = chatBox.scrollHeight;
+
+  const bDiv = document.createElement('div');
+  bDiv.className = 'message bot';
+  bDiv.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Analyzing your data...';
+  chatBox.appendChild(bDiv);
   chatBox.scrollTop = chatBox.scrollHeight;
 
   try {
@@ -1000,14 +1373,11 @@ async function askQuestion() {
     if (!res.ok) throw new Error('Question failed');
     const d = await res.json();
 
-    const bDiv = document.createElement('div');
-    bDiv.className = 'message bot';
-
     let html = '';
 
     // Check if the backend returned an error
     if (d.success === false || d.error) {
-      html = `<p style="color:var(--amber); margin:4px 0;"><i class="fa-solid fa-triangle-exclamation"></i> AI service temporarily unavailable.</p>`;
+      html = `<p style="color:var(--amber); margin:4px 0;"><i class="fa-solid fa-triangle-exclamation"></i> ${d.error || 'AI service temporarily unavailable.'}</p>`;
     } else {
       html = `<strong>Analysis:</strong><p style="margin:4px 0;">${d.explanation || 'Query executed successfully.'}</p>`;
       if (d.results && d.results.length > 0) {
@@ -1209,4 +1579,4 @@ function _vizMakeSection(parent, title, subtitle) {
   return sec;
 }
 
-console.log('InsightIQ App.js Loaded - Version 2.0 (OpenRouter Fix)');
+console.log('InsightIQ App.js Loaded - Version 3.2 (Gemini AI)');

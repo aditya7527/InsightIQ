@@ -42,7 +42,7 @@
 
   --radius-sm: 8px;
 
-  --sidebar-w: 240px;
+  --sidebar-w: 260px;
 
   --shadow: 0 1px 3px 0 rgb(0 0 0 / 0.1), 0 1px 2px -1px rgb(0 0 0 / 0.1);
 
@@ -743,11 +743,9 @@ body {
 }
 
 .main-content {
-
-  padding: 1.5rem 2rem 3rem;
-
-  max-width: 1300px;
-
+  padding: 2rem 3rem 4rem;
+  max-width: 1400px;
+  margin: 0 auto;
 }
 
 /* ========== CONTENT SECTIONS (SPA nav) ========== */
@@ -759,25 +757,29 @@ body {
 }
 
 .content-section.active {
-
   display: block;
+  animation: slideUpFade 0.4s cubic-bezier(0.16, 1, 0.3, 1);
+}
 
-  animation: fadeIn 0.3s ease-in-out;
+@keyframes slideUpFade {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
 
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
 }
 
 /* Visualization charts 2-col grid */
 
 .charts-grid {
-
   display: grid;
-
   grid-template-columns: repeat(2, 1fr);
-
-  gap: 1rem;
-
-  margin-bottom: 1rem;
-
+  gap: 2rem;
+  margin-bottom: 2rem;
 }
 
 .charts-grid .section {
@@ -965,19 +967,12 @@ body {
 /* ========== CHART SECTION ========== */
 
 .section {
-
   background: var(--bg-card);
-
   border: 1px solid var(--border);
-
   border-radius: var(--radius);
-
-  padding: 1.75rem;
-
-  margin-bottom: 1.5rem;
-
-  box-shadow: var(--shadow);
-
+  padding: 2rem;
+  margin-bottom: 2rem;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.03);
 }
 
 .section-title {
@@ -1420,30 +1415,18 @@ body {
 
 /* ========== FORECAST TABLE ========== */
 
-.forecast-table {
-
-  width: 100%;
-
-  border-collapse: separate;
-
-  /* Changed for border-radius */
-
-  border-spacing: 0;
-
-  margin-top: 0.8rem;
-
+.forecast-card-wrapper {
   background: rgba(255, 255, 255, 0.95);
-
-  /* High opacity white */
-
   border-radius: 12px;
-
   overflow: hidden;
-
-  /* Clips children to radius */
-
   box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
+  margin-top: 0.8rem;
+}
 
+.forecast-table {
+  width: 100%;
+  border-collapse: separate;
+  border-spacing: 0;
 }
 
 .forecast-table th {
@@ -1493,89 +1476,53 @@ body {
 /* ========== CHAT ========== */
 
 .chat-interface {
-
-  background: rgba(15, 23, 42, 0.4);
-
-  border-radius: var(--radius-sm);
-
+  background: #ffffff;
+  border-radius: var(--radius);
   border: 1px solid var(--border);
-
   overflow: hidden;
-
-  height: 420px;
-
+  height: 500px;
   display: flex;
-
   flex-direction: column;
-
+  box-shadow: var(--shadow);
 }
 
 .chat-messages {
-
   flex: 1;
-
-  padding: 1.2rem;
-
+  padding: 1.5rem;
   overflow-y: auto;
-
   display: flex;
-
   flex-direction: column;
-
-  gap: 0.8rem;
-
+  gap: 1rem;
+  background: #f8fafc;
 }
 
-.message,
-
-.chat-message {
-
-  padding: 10px 14px;
-
+.message {
+  padding: 12px 16px;
   border-radius: 12px;
-
-  max-width: 85%;
-
+  max-width: 80%;
   line-height: 1.5;
-
-  font-size: 0.85rem;
-
+  font-size: 0.95rem;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.02);
+  position: relative;
+  transition: transform 0.2s ease;
 }
 
-.message.user,
-
-.chat-message.user {
-
+.message.user {
   align-self: flex-end;
-
-  background: var(--gradient-primary);
-
-  color: #fff;
-
-  border-bottom-right-radius: 4px;
-
+  background: var(--accent);
+  color: white;
+  border-bottom-right-radius: 2px;
 }
 
-.message.bot,
-
-.chat-message.bot {
-
+.message.bot {
   align-self: flex-start;
-
   background: white;
-
-  color: var(--text-gray);
-
-  border-bottom-left-radius: 4px;
-
   border: 1px solid var(--border);
-
-  box-shadow: var(--shadow);
-
+  color: var(--text-main);
+  border-bottom-left-radius: 2px;
 }
 
 .message.bot table,
-
 .chat-message.bot table {
 
   width: 100%;
@@ -1615,51 +1562,34 @@ body {
 }
 
 .chat-input-area {
-
-  padding: 0.8rem 1.2rem;
-
-  background: rgba(15, 23, 42, 0.6);
-
-  display: flex;
-
-  gap: 0.6rem;
-
+  padding: 1rem;
+  background: #fff;
   border-top: 1px solid var(--border);
-
+  display: flex;
+  gap: 12px;
+  align-items: center;
 }
 
 .chat-input-area input {
-
   flex: 1;
-
-  padding: 10px 14px;
-
-  border-radius: var(--radius-sm);
-
+  padding: 12px 18px;
   border: 1px solid var(--border);
-
-  background: white;
-
+  border-radius: 30px;
+  font-size: 0.95rem;
+  outline: none;
+  transition: all 0.2s;
+  background: #f8fafc;
   color: var(--text-main);
-
-  font-size: 0.85rem;
-
-  font-family: inherit;
-
 }
 
 .chat-input-area input:focus {
-
-  outline: none;
-
   border-color: var(--accent);
-
+  background: #fff;
+  box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1);
 }
 
 .chat-input-area input::placeholder {
-
   color: var(--text-muted);
-
 }
 
 /* ========== SUMMARY ========== */
@@ -2078,52 +2008,146 @@ input:checked+.slider:before {
   text-shadow: none !important;
 }
 
-/* ========== FORECAST SECTION OVERRIDE ========== */
-#forecast-section {
+#forecastTable {
+  margin-top: 2rem;
+}
+
+/* ========== TRUST MODAL & INTERACTION ========== */
+.modal-overlay {
+  position: fixed !important;
+  top: 0 !important;
+  left: 0 !important;
+  width: 100% !important;
+  height: 100% !important;
+  background: rgba(15, 23, 42, 0.7) !important;
+  backdrop-filter: blur(8px) !important;
+  z-index: 10000 !important;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  padding: 1.5rem;
+  animation: fadeIn 0.2s ease-out;
+}
+
+.modal-content {
   background: white !important;
-  border-radius: 12px !important;
-  padding: 24px !important;
-  margin-top: 2rem !important;
-  box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06) !important;
-  border: 1px solid #e2e8f0 !important;
-  position: relative;
-  z-index: 10;
-}
-
-#forecast-section h2, 
-#forecast-section h3, 
-#forecast-section .section-title,
-#forecast-section p, 
-#forecast-section label {
-  color: #1e293b !important; /* Slate-800 for high contrast */
-  text-shadow: none !important;
-}
-
-#forecast-section .section-subtitle {
-  color: #64748b !important; /* Slate-500 for subtitle */
-  text-shadow: none !important;
-}
-
-/* ========== ABSOLUTE FORECAST OVERRIDE ========== */
-html body #forecast-section {
-  background-color: #ffffff !important;
-  background: #ffffff !important;
-  border-radius: 12px !important;
-  padding: 24px !important;
-  margin-top: 2rem !important;
-  box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06) !important;
-  border: 1px solid #e2e8f0 !important;
+  width: 100% !important;
+  max-width: 600px !important;
+  border-radius: 20px !important;
+  box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.25) !important;
+  overflow: hidden;
   position: relative !important;
-  z-index: 9999 !important;
-  display: block !important;
-  opacity: 1 !important;
+  animation: modalSlideUp 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+  border: 1px solid rgba(255, 255, 255, 0.1);
 }
 
-html body #forecast-section * {
-  color: #1e293b !important;
-  text-shadow: none !important;
+.metric-card.highlight {
+  cursor: pointer;
+  transition: transform 0.2s cubic-bezier(0.175, 0.885, 0.32, 1.275), box-shadow 0.2s;
 }
 
-html body #forecast-section .section-subtitle {
-  color: #64748b !important;
+.metric-card.highlight:hover {
+  transform: scale(1.03) translateY(-2px);
+  box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 10px 10px -5px rgba(0, 0, 0, 0.04);
+}
+
+.modal-header {
+  padding: 1.5rem 2rem;
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  background: #fdfdfd;
+}
+
+.modal-body {
+  padding: 2rem;
+}
+
+.modal-close {
+  background: #f1f5f9;
+  border: none;
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  font-size: 1.25rem;
+  color: var(--text-muted);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.2s;
+}
+
+.modal-close:hover {
+  background: #e2e8f0;
+  color: var(--text-main);
+  transform: rotate(90deg);
+}
+
+.trust-table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 1.5rem 0;
+}
+
+.trust-table th {
+  text-align: left;
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  letter-spacing: 0.05em;
+  padding-bottom: 0.75rem;
+  border-bottom: 1px solid var(--border);
+}
+
+.trust-table td {
+  padding: 1rem 0;
+  border-bottom: 1px solid #f1f5f9;
+  font-size: 0.875rem;
+}
+
+.trust-impact-pill {
+  padding: 4px 10px;
+  border-radius: 99px;
+  font-size: 0.7rem;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.impact-strong {
+  background: #dcfce7;
+  color: #166534;
+}
+
+.impact-moderate {
+  background: #fef9c3;
+  color: #854d0e;
+}
+
+.impact-weak {
+  background: #fee2e2;
+  color: #991b1b;
+}
+
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+  }
+
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes modalSlideUp {
+  from {
+    transform: translateY(30px) scale(0.95);
+    opacity: 0;
+  }
+
+  to {
+    transform: translateY(0) scale(1);
+    opacity: 1;
+  }
 }

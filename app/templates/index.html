@@ -7,37 +7,14 @@
   <title>InsightIQ — AI Business Intelligence Engine</title>
   <meta name="description"
     content="AI-powered business intelligence platform for data analysis, forecasting, and executive insights.">
-  <link rel="stylesheet" href="/static/style.css?t={{ now }}">
+  <link rel="stylesheet" href="/static/style.css?v=3.5">
   <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css" rel="stylesheet">
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
-  <style>
-    /* Force Override for Forecast Section */
-    #forecast-section {
-      background: #ffffff !important;
-      border-radius: 12px !important;
-      padding: 24px !important;
-      margin-top: 2rem !important;
-      box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06) !important;
-      border: 1px solid #e2e8f0 !important;
-      position: relative !important;
-      z-index: 99 !important;
-      display: block !important;
-    }
-
-    #forecast-section h2,
-    #forecast-section h3,
-    #forecast-section .section-title,
-    #forecast-section p,
-    #forecast-section label {
-      color: #1e293b !important;
-      text-shadow: none !important;
-    }
-
-    #forecast-section .section-subtitle {
-      color: #64748b !important;
-      text-shadow: none !important;
-    }
-  </style>
+  <!-- React & Recharts -->
+  <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+  <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+  <script src="https://unpkg.com/prop-types/prop-types.min.js"></script>
+  <script src="https://unpkg.com/recharts@2.10.3/umd/Recharts.js"></script>
 </head>
 
 <body>
@@ -69,7 +46,7 @@
     </div>
 
     <p style="margin-top: 2rem; color: rgba(148,163,184,0.5); font-size: 0.85rem;">
-      Enterprise-grade analytics powered by GPT-4 &amp; Machine Learning
+      Enterprise-grade analytics powered by Gemini AI &amp; Machine Learning
     </p>
   </div>
 
@@ -95,6 +72,8 @@
           <a class="sidebar-link" onclick="switchToSection('forecast-section', this)"><i
               class="fa-solid fa-arrow-trend-up"></i>
             Forecasting</a>
+          <a class="sidebar-link" onclick="switchToSection('cohort-section', this)"><i
+              class="fa-solid fa-users-rays"></i> Customer Retention</a>
           <a class="sidebar-link" onclick="switchToSection('askdata-section', this)"><i
               class="fa-solid fa-comments"></i> Ask Data</a>
           <a class="sidebar-link" onclick="switchToSection('datasets-section', this)"><i
@@ -129,115 +108,153 @@
         </header>
 
         <main class="main-content">
+          <div id="spa-container">
 
-          <!-- ========== SECTION: Dashboard ========== -->
-          <div id="dashboard-section" class="content-section active">
-            <div id="metricsSection" class="metrics-grid"></div>
+            <!-- ========== SECTION: Dashboard ========== -->
+            <div id="dashboard-section" class="content-section active">
+              <div id="metricsSection" class="metrics-grid"></div>
 
-            <div id="chartsSection" class="charts-grid"></div>
-            <div id="chartsRow2" class="charts-grid"></div>
+              <div id="chartsSection" class="charts-grid"></div>
+              <div id="chartsRow2" class="charts-grid"></div>
 
-            <div class="charts-grid">
-              <div class="section">
-                <h3 class="section-title"><i class="fa-solid fa-table-columns"></i> Column Statistics</h3>
-                <div class="table-responsive">
-                  <table class="data-table">
-                    <thead>
-                      <tr>
-                        <th>Column</th>
-                        <th>Type</th>
-                        <th>Non-Null</th>
-                        <th>Missing %</th>
-                      </tr>
-                    </thead>
-                    <tbody id="statsBody"></tbody>
-                  </table>
+              <div class="charts-grid">
+                <div class="section">
+                  <h3 class="section-title"><i class="fa-solid fa-table-columns"></i> Column Statistics</h3>
+                  <div class="table-responsive">
+                    <table class="data-table">
+                      <thead>
+                        <tr>
+                          <th>Column</th>
+                          <th>Type</th>
+                          <th>Non-Null</th>
+                          <th>Missing %</th>
+                        </tr>
+                      </thead>
+                      <tbody id="statsBody"></tbody>
+                    </table>
+                  </div>
+                </div>
+                <div class="section">
+                  <h3 class="section-title"><i class="fa-solid fa-lightbulb"></i> AI Insights</h3>
+                  <div id="insights"></div>
                 </div>
               </div>
+
+            </div>
+
+            <!-- ========== SECTION: Visualizations ========== -->
+            <div id="visualizations-section" class="content-section">
+              <div id="vizChartsArea"></div>
+            </div>
+
+            <div id="rootcause-section" class="content-section">
+              <div id="rootCauseSection" class="section accent-red">
+                <h3 class="section-title"><i class="fa-solid fa-bullseye"></i> Period Analysis</h3>
+                <p class="section-subtitle">Automated detection of revenue drivers and detractors</p>
+                <div id="rootCauseContent">
+                  <p style="color: var(--text-muted);">Analyzing drivers...</p>
+                </div>
+              </div>
+            </div>
+
+            <!-- ========== SECTION: Cohort Retention ========== -->
+            <div id="cohort-section" class="content-section">
               <div class="section">
-                <h3 class="section-title"><i class="fa-solid fa-lightbulb"></i> AI Insights</h3>
-                <div id="insights"></div>
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px;">
+                  <h3 class="section-title"><i class="fa-solid fa-users-rays"></i> Customer Retention</h3>
+                  <div id="cohortConfidenceBadge"></div>
+                </div>
+                <p class="section-subtitle">Behavioral intelligence and monthly cohort performance</p>
+                <div id="cohortSummaryCards" style="display: flex; gap: 16px; margin-bottom: 2rem; flex-wrap: wrap;">
+                </div>
+                <div id="cohortHeatmapContainer"
+                  style="width: 100%; min-height: 400px; background: white; border-radius: 12px; border: 1px solid var(--border); padding: 1.5rem;">
+                  <p style="color: var(--text-muted); text-align: center; margin-top: 15vh;"><i
+                      class="fa-solid fa-circle-notch fa-spin"></i> Analyzing behavioral cohorts...</p>
+                </div>
               </div>
             </div>
-          </div>
 
-          <!-- ========== SECTION: Visualizations ========== -->
-          <div id="visualizations-section" class="content-section">
-            <div id="vizChartsArea"></div>
-          </div>
+            <!-- ========== SECTION: Forecasting ========== -->
+            <div id="forecast-section" class="content-section">
+              <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px;">
+                <h3 class="section-title"><i class="fa-solid fa-chart-line"></i> Revenue Forecast</h3>
+              </div>
+              <p class="section-subtitle">Projected trend with confidence band</p>
+              <div style="height: 350px; width: 100%; position: relative;">
+                <canvas id="forecastChart"></canvas>
+              </div>
+              <div id="forecastTable"></div>
+            </div>
 
-          <div id="rootcause-section" class="content-section">
-            <div id="rootCauseSection" class="section accent-red">
-              <h3 class="section-title"><i class="fa-solid fa-bullseye"></i> Period Analysis</h3>
-              <p class="section-subtitle">Automated detection of revenue drivers and detractors</p>
-              <div id="rootCauseContent">
-                <p style="color: var(--text-muted);">Analyzing drivers...</p>
+
+
+            <!-- ========== SECTION: Ask Your Data ========== -->
+            <div id="askdata-section" class="content-section">
+              <div id="chatSection" class="section">
+                <h3 class="section-title"><i class="fa-solid fa-comments"></i> Ask Your Data</h3>
+                <div class="chat-interface">
+                  <div id="chatBox" class="chat-messages">
+                    <div class="message bot">
+                      Hi! I'm your AI analyst. Ask me anything about your dataset — e.g., "What is the total revenue by
+                      region?"
+                    </div>
+                  </div>
+                  <div class="chat-input-area">
+                    <input type="text" id="questionInput" placeholder="Ask a question about your data...">
+                    <button onclick="askQuestion()" class="btn-primary"
+                      style="width: auto; padding: 10px 24px; margin: 0;">
+                      <i class="fa-solid fa-paper-plane"></i>
+                    </button>
+                  </div>
+                </div>
               </div>
             </div>
+
+            <!-- ========== SECTION: Datasets ========== -->
+            <div id="datasets-section" class="content-section">
+              <div class="section" style="text-align:center; padding:3rem 2rem;">
+                <i class="fa-solid fa-folder-open" style="font-size:3rem; color:var(--accent); margin-bottom:1rem;"></i>
+                <h3 class="section-title" style="justify-content:center; font-size:1.2rem; margin-bottom:0.5rem;">
+                  Dataset
+                  Management</h3>
+                <p style="color:var(--text-muted); margin-bottom:1.5rem;">Upload a new dataset to start a fresh analysis
+                </p>
+                <button class="btn-primary" onclick="goBack()"
+                  style="width:auto; padding:12px 32px; display:inline-flex; align-items:center; gap:8px;">
+                  <i class="fa-solid fa-cloud-arrow-up"></i> Upload New Dataset
+                </button>
+              </div>
+            </div>
+
           </div>
 
-          <!-- ========== SECTION: Forecasting ========== -->
-          <div id="forecast-section" class="content-section">
-            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px;">
-              <h3 class="section-title"><i class="fa-solid fa-chart-line"></i> Revenue Forecast</h3>
-            </div>
-            <p class="section-subtitle">Projected trend with confidence band</p>
-            <div style="height: 350px; width: 100%; position: relative;">
-              <canvas id="forecastChart"></canvas>
-            </div>
-            <div id="forecastTable"></div>
-          </div>
-
-          <div id="summarySection" class="section" style="margin-top:1.2rem;">
+          <div id="summarySection" class="section">
             <h3 class="section-title"><i class="fa-solid fa-brain"></i> Executive Summary</h3>
             <div id="summaryContent" class="summary-content">
               <p style="color: var(--text-muted);">Generating AI summary...</p>
             </div>
           </div>
-      </div>
 
-      <!-- ========== SECTION: Ask Your Data ========== -->
-      <div id="askdata-section" class="content-section">
-        <div id="chatSection" class="section">
-          <h3 class="section-title"><i class="fa-solid fa-comments"></i> Ask Your Data</h3>
-          <div class="chat-interface">
-            <div id="chatBox" class="chat-messages">
-              <div class="message bot">
-                Hi! I'm your AI analyst. Ask me anything about your dataset — e.g., "What is the total revenue by
-                region?"
-              </div>
-            </div>
-            <div class="chat-input-area">
-              <input type="text" id="questionInput" placeholder="Ask a question about your data...">
-              <button onclick="askQuestion()" class="btn-primary" style="width: auto; padding: 10px 24px; margin: 0;">
-                <i class="fa-solid fa-paper-plane"></i>
-              </button>
-            </div>
-          </div>
-        </div>
+        </main>
       </div>
-
-      <!-- ========== SECTION: Datasets ========== -->
-      <div id="datasets-section" class="content-section">
-        <div class="section" style="text-align:center; padding:3rem 2rem;">
-          <i class="fa-solid fa-folder-open" style="font-size:3rem; color:var(--accent); margin-bottom:1rem;"></i>
-          <h3 class="section-title" style="justify-content:center; font-size:1.2rem; margin-bottom:0.5rem;">Dataset
-            Management</h3>
-          <p style="color:var(--text-muted); margin-bottom:1.5rem;">Upload a new dataset to start a fresh analysis
-          </p>
-          <button class="btn-primary" onclick="goBack()"
-            style="width:auto; padding:12px 32px; display:inline-flex; align-items:center; gap:8px;">
-            <i class="fa-solid fa-cloud-arrow-up"></i> Upload New Dataset
-          </button>
-        </div>
-      </div>
-
-      </main>
     </div>
   </div>
+
+  <!-- Trust Explanation Modal -->
+  <div id="trustModal" class="modal-overlay">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h3 style="margin:0; font-size:1.1rem; color:var(--text-main);">Analytical Confidence Breakdown</h3>
+        <button class="modal-close" onclick="closeTrustModal()">&times;</button>
+      </div>
+      <div class="modal-body" id="trustModalBody">
+        <!-- Content injected by JS -->
+      </div>
+    </div>
   </div>
 
-  <script src="/static/app.js?t={{ now }}"></script>
+  <script src="/static/app.js?v=3.2"></script>
 </body>
 
 </html>

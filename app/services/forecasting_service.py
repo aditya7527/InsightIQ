@@ -1,203 +1,235 @@
+"""
+Forecasting Service — consumes Revenue Engine output.
 
+# DO NOT COMPUTE REVENUE OUTSIDE revenue_engine.py
+All time-series input comes from compute_monthly_revenue() or
+get_monthly_series_from_result().
+"""
 import pandas as pd
 import numpy as np
 import logging
-from typing import Dict, List, Optional
+from typing import Dict, Optional
+
 from statsmodels.tsa.statespace.sarimax import SARIMAX
 from statsmodels.tsa.holtwinters import ExponentialSmoothing
 from sklearn.metrics import mean_absolute_error, r2_score
 
+from app.services.revenue_engine import (
+    compute_monthly_revenue,
+    get_monthly_series_from_result,
+    detect_date_column,
+    detect_revenue_column,
+    _try_compute_revenue,
+    compute_volatility,
+)
+from app.utils.file_processing import detect_currency
+
 logger = logging.getLogger(__name__)
 
-def generate_forecast(df: pd.DataFrame, revenue_column: str, date_column: str, periods: int = 3) -> Dict:
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Public Entry Point (receives raw df — delegates aggregation to revenue engine)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def generate_forecast(
+    df: pd.DataFrame,
+    revenue_column: str,
+    date_column: str,
+    periods: int = 3,
+    rev_result: Optional[Dict] = None,
+) -> Dict:
     """
-    Enterprise-grade forecasting engine.
-    Implements strict preprocessing, volatility-based aggregation,
-    hierarchical model selection, and rigorous reliability gating.
+    Enterprise-grade forecast.
+
+    Flow:
+      1. Compute revenue via revenue_engine (monthly normalisation)
+      2. Extract pd.Series from result
+      3. Apply gates (N, CV, R²)
+      4. Fit SARIMAX → Holt-Winters fallback
+      5. Return structured output
+
+    # DO NOT COMPUTE REVENUE OUTSIDE revenue_engine.py
     """
-    try:
-        # 1. Preprocessing Layer
-        df = df.copy()
-        df[date_column] = pd.to_datetime(df[date_column], errors='coerce')
-        df = df.dropna(subset=[date_column])
-        df = df.sort_values(by=date_column)
-        df = df.set_index(date_column)
-        
-        if not df.index.is_monotonic_increasing:
-            df = df.sort_index()
+    currency = detect_currency(df)
 
-        # 2. Automatic Frequency Detection
-        inferred_freq = pd.infer_freq(df.index)
-        if not inferred_freq:
-            # Heuristic fallback
-            diff_days = pd.Series(df.index).diff().dt.days.median()
-            if diff_days <= 2:
-                inferred_freq = 'D'
-            elif diff_days <= 10:
-                inferred_freq = 'W'
-            else:
-                inferred_freq = 'MS'
-        
-        # Initial resampling
-        ts = df[revenue_column].resample(inferred_freq).sum().fillna(0)
-        aggregation_applied = False
+    # ── Step 1: compute via Revenue Engine ────────────────────────────────────
+    if rev_result is None:
+        df = _try_compute_revenue(df)
+        rev_result = compute_monthly_revenue(df, date_column, revenue_column, currency=currency)
 
-        # 3. Volatility & Density Detection
-        mean_rev = ts.mean()
-        std_rev = ts.std()
-        cv = std_rev / abs(mean_rev) if abs(mean_rev) > 0 else 10.0
-        num_points = len(ts)
-        is_daily = inferred_freq and 'D' in inferred_freq.upper()
-        
-        logger.info(f"Forecasting: Freq={inferred_freq}, Points={num_points}, CV={cv:.2f}")
+    if rev_result["status"] == "insufficient_data":
+        return _invalid_response(
+            [], currency,
+            "Forecast not reliable due to insufficient data points."
+        )
 
-        # If daily data is detected, aggregate to Monthly for a clean 'Revenue Trend' view.
-        # Daily spikes are almost always visual noise for forecasting.
-        if is_daily:
-            ts = df[revenue_column].resample("MS").sum().fillna(0)
-            inferred_freq = "MS"
-            aggregation_applied = True
-            logger.info("Enforced monthly aggregation for a smooth executive line curve.")
-        elif num_points > 60:
-            # High density non-daily: Aggregate to Monthly or Weekly depending on existing frequency
-            if 'W' in inferred_freq.upper():
-                ts = df[revenue_column].resample("MS").sum().fillna(0)
-                inferred_freq = "MS"
-                aggregation_applied = True
-                logger.info("Aggregated weekly data to monthly for visual clarity.")
+    # ── Step 2: extract monthly series ────────────────────────────────────────
+    ts: pd.Series = get_monthly_series_from_result(rev_result)
+    ts.index = pd.DatetimeIndex(ts.index, freq="MS")
 
-        # Data Length Check
-        n = len(ts)
-        if n < 12:
-            return {
-                "status": "insufficient_data",
-                "aggregation_applied": aggregation_applied,
-                "message": "Insufficient historical data (minimum 12 periods required).",
-                "historical": [{"date": str(i.date()), "value": float(v)} for i, v in ts.items()],
-                "success": False
-            }
+    n = len(ts)
+    mean_rev = float(ts.mean())
+    std_rev = float(ts.std())
+    cv = std_rev / abs(mean_rev) if abs(mean_rev) > 0 else 10.0
+    volatility = compute_volatility(ts)
 
-        # 4. Hierarchical Model Strategy
-        model_used = "none"
-        metric_r2 = -1.0
-        metric_mae = 0.0
-        metric_mape = 0.0
-        forecast_values = []
-        conf_int_lower = []
-        conf_int_upper = []
-        
-        s = 12 if 'M' in inferred_freq.upper() else (52 if 'W' in inferred_freq.upper() else 7)
-        
-        # Strategy: SARIMAX if N >= 18, else HW
-        if n >= 18:
-            try:
-                # SARIMAX(1,1,1)(1,1,1,s)
-                model = SARIMAX(ts, order=(1,1,1), seasonal_order=(1,1,1,s),
-                                enforce_stationarity=False, enforce_invertibility=False)
-                results = model.fit(disp=False)
-                
-                # Validation (In-sample)
-                y_pred = results.fittedvalues
-                metric_r2 = r2_score(ts, y_pred)
-                
-                if metric_r2 >= 0:
-                    model_used = "sarimax"
-                    f_res = results.get_forecast(steps=periods)
-                    forecast_values = f_res.predicted_mean
-                    ci = f_res.conf_int()
-                    conf_int_lower = ci.iloc[:, 0].tolist()
-                    conf_int_upper = ci.iloc[:, 1].tolist()
-                    metric_mae = mean_absolute_error(ts, y_pred)
-                    metric_mape = np.mean(np.abs((ts - y_pred) / ts.replace(0, 1))) * 100
-            except Exception as e:
-                logger.warning(f"SARIMAX fit failed: {e}")
+    logger.info("Forecasting: Points=%d, CV=%.2f, Currency=%s", n, cv, currency)
 
-        # Fallback to Holt-Winters if SARIMAX failed or R2 < 0
-        if model_used == "none":
-            try:
-                # Holt-Winters
-                seasonal_type = 'add' if n >= 2*s else None
-                model = ExponentialSmoothing(ts, trend='add', seasonal=seasonal_type, seasonal_periods=s if seasonal_type else None)
-                results = model.fit()
-                
-                y_pred = results.fittedvalues
-                metric_r2 = r2_score(ts, y_pred)
-                model_used = "holt_winters"
-                
-                forecast_values = results.forecast(periods)
-                # HW analytical CI is complex; use residual std dev
-                resid_std = (ts - y_pred).std()
-                conf_int_lower = (forecast_values - 1.96 * resid_std).tolist()
-                conf_int_upper = (forecast_values + 1.96 * resid_std).tolist()
+    # ── Step 3: Reliability Gates ──────────────────────────────────────────────
+    historical_list = [{"date": str(idx.date()), "value": float(val)} for idx, val in ts.items()]
+
+    if n < 12:
+        return _invalid_response(historical_list, currency, "Forecast not reliable due to insufficient data points.")
+    if cv > 1.2:
+        return _invalid_response(historical_list, currency, "Forecast not reliable due to high volatility.")
+
+    # ── Step 4: Hierarchical Model Selection ──────────────────────────────────
+    model_used = "none"
+    metric_r2 = -1.0
+    metric_mae = 0.0
+    metric_mape = 0.0
+    forecast_values = []
+    conf_int_lower = []
+    conf_int_upper = []
+
+    s = 12  # monthly data always has seasonality period 12
+
+    if n >= 18:
+        try:
+            model = SARIMAX(ts, order=(1, 1, 1), seasonal_order=(1, 1, 1, s),
+                            enforce_stationarity=False, enforce_invertibility=False)
+            results = model.fit(disp=False)
+            y_pred = results.fittedvalues
+            metric_r2 = r2_score(ts, y_pred)
+
+            if metric_r2 >= 0:
+                model_used = "sarimax"
+                f_res = results.get_forecast(steps=periods)
+                forecast_values = f_res.predicted_mean
+                ci = f_res.conf_int()
+                conf_int_lower = ci.iloc[:, 0].tolist()
+                conf_int_upper = ci.iloc[:, 1].tolist()
                 metric_mae = mean_absolute_error(ts, y_pred)
-                metric_mape = np.mean(np.abs((ts - y_pred) / ts.replace(0, 1))) * 100
-            except Exception as e:
-                logger.error(f"Holt-Winters failed: {e}")
-                return _empty_forecast_response("Forecasting models failed.")
+                metric_mape = float(np.mean(np.abs((ts - y_pred) / ts.replace(0, 1))) * 100)
+        except Exception as e:
+            logger.warning("SARIMAX fit failed: %s", e)
 
-        # 5. Reliability Gating
+    # Fallback to Holt-Winters
+    if model_used == "none":
+        try:
+            seasonal_type = 'add' if n >= 2 * s else None
+            hw_model = ExponentialSmoothing(
+                ts, trend='add',
+                seasonal=seasonal_type,
+                seasonal_periods=s if seasonal_type else None
+            )
+            hw_results = hw_model.fit()
+            y_pred = hw_results.fittedvalues
+            metric_r2 = r2_score(ts, y_pred)
+            model_used = "holt_winters"
+            forecast_values = hw_results.forecast(periods)
+            resid_std = float((ts - y_pred).std())
+            conf_int_lower = (forecast_values - 1.96 * resid_std).tolist()
+            conf_int_upper = (forecast_values + 1.96 * resid_std).tolist()
+            metric_mae = mean_absolute_error(ts, y_pred)
+            metric_mape = float(np.mean(np.abs((ts - y_pred) / ts.replace(0, 1))) * 100)
+        except Exception as e:
+            logger.error("Holt-Winters failed: %s", e)
+            return _error_response(currency, "Forecasting models failed due to extreme data variance.")
+
+    # ── Gate 2: R² < 0 → invalid ──────────────────────────────────────────────
+    if metric_r2 < 0:
+        return _invalid_response(
+            historical_list, currency,
+            "Forecast not reliable due to poor model fit (R² < 0)."
+        )
+
+    # ── Step 5: Reliability Tier ───────────────────────────────────────────────
+    if metric_r2 >= 0.6 and cv <= 0.8:
         reliability = "high"
-        if metric_r2 < 0.3 or n < 18 or metric_mape > 35:
-            reliability = "low"
-        elif metric_r2 < 0.6:
-            reliability = "medium"
-            
-        if metric_r2 < 0:
-            return {
-                "status": "unreliable",
-                "message": "Data volatility prevents statistically meaningful forecasting.",
-                "aggregation_applied": aggregation_applied,
-                "metrics": {"r2": round(metric_r2, 4), "reliability": "invalid"},
-                "success": False
-            }
+    elif metric_r2 >= 0.3:
+        reliability = "medium"
+    else:
+        reliability = "low"
 
-        # 6. Trend Detection
-        slope = np.polyfit(range(len(forecast_values)), forecast_values, 1)[0]
-        threshold = 0.02 * ts.mean()
-        if abs(slope) < threshold:
-            trend = "stable"
-        elif slope > 0:
-            trend = "increasing"
-        else:
-            trend = "decreasing"
+    # ── Step 6: Trend Direction (linear regression on historical series) ───────
+    ts_values = ts.values
+    slope = float(np.polyfit(range(len(ts_values)), ts_values, 1)[0])
+    if slope > 0.01:
+        trend = "increasing"
+    elif slope < -0.01:
+        trend = "decreasing"
+    else:
+        trend = "stable"
 
-        # 7. Output Construction
-        future_index = pd.date_range(start=ts.index[-1], periods=periods+1, freq=inferred_freq)[1:]
-        
-        return {
-            "status": "success",
-            "aggregation_applied": aggregation_applied,
-            "historical": [{"date": str(idx.date()), "value": float(val)} for idx, val in ts.items()],
-            "forecast": [{"period": str(idx.date()), "value": float(val)} for idx, val in zip(future_index, forecast_values)],
-            "confidence_intervals": [
-                {
-                    "period": str(idx.date()),
-                    "lower": max(0, float(l)),
-                    "upper": float(u)
-                } for idx, l, u in zip(future_index, conf_int_lower, conf_int_upper)
-            ],
-            "metrics": {
-                "r2": round(float(metric_r2), 4),
-                "mae": round(float(metric_mae), 2),
-                "mape": round(float(metric_mape), 2),
-                "reliability": reliability,
-                "model_used": model_used
-            },
-            "trend": trend,
-            "success": True
-        }
+    # ── Step 7: Output ─────────────────────────────────────────────────────────
+    future_index = pd.date_range(start=ts.index[-1], periods=periods + 1, freq="MS")[1:]
 
-    except Exception as e:
-        logger.error(f"Global forecasting error: {e}")
-        return _empty_forecast_response(str(e))
+    if ts.min() >= 0:
+        conf_int_lower = [max(0.0, float(x)) for x in conf_int_lower]
 
-def _empty_forecast_response(msg: str):
     return {
+        "status": "success",
+        "success": True,
+        "currency": currency,
+        "historical": historical_list,
+        "forecast": [
+            {"period": str(idx.date()), "value": float(val)}
+            for idx, val in zip(future_index, forecast_values)
+        ],
+        "confidence_intervals": {
+            "lower": [float(x) for x in conf_int_lower],
+            "upper": [float(x) for x in conf_int_upper],
+        },
+        "metrics": {
+            "r2": round(float(metric_r2), 4),
+            "mae": round(float(metric_mae), 2),
+            "mape": round(float(metric_mape), 2),
+            "reliability": reliability,
+            "model_used": model_used,
+        },
+        "trend": trend,
+        "period_context": {
+            "current_period": rev_result["current_period"],
+            "previous_period": rev_result["previous_period"],
+            "n_months": rev_result["n_months"],
+        },
+        "volatility": volatility,
+        "error": None,
+    }
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Private Helpers
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _invalid_response(historical: list, currency: str, msg: str) -> Dict:
+    return {
+        "status": "invalid_forecast",
+        "success": False,
+        "currency": currency,
+        "historical": historical,
+        "forecast": [],
+        "confidence_intervals": {"lower": [], "upper": []},
+        "metrics": {"r2": 0.0, "mae": 0.0, "reliability": "invalid", "model_used": "none"},
+        "trend": "stable",
+        "volatility": {"cv": 0.0, "stability_label": "Insufficient Data"},
+        "error": msg,
+        "message": msg,
+    }
+
+
+def _error_response(currency: str, msg: str) -> Dict:
+    return {
+        "status": "error",
+        "success": False,
+        "currency": currency,
         "historical": [],
         "forecast": [],
-        "confidence_intervals": [],
-        "metrics": {"r2": 0.0, "mae": 0.0, "reliability": "low"},
+        "confidence_intervals": {"lower": [], "upper": []},
+        "metrics": {"r2": 0.0, "mae": 0.0, "reliability": "invalid", "model_used": "none"},
         "trend": "stable",
-        "success": False,
-        "message": msg
+        "volatility": {"cv": 0.0, "stability_label": "Insufficient Data"},
+        "error": msg,
+        "message": msg,
     }
