@@ -52,7 +52,7 @@ def auto_detect_revenue_column(df: pd.DataFrame) -> Optional[str]:
     # Fallback: largest non-ID numeric column
     numeric_cols = [c for c in df.select_dtypes(include=['number']).columns if not _is_id(c)]
     if numeric_cols:
-        return numeric_cols[df[numeric_cols].mean().idxmax()]
+        return df[numeric_cols].mean().idxmax()
     return None
 
 

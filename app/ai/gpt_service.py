@@ -1,107 +1,159 @@
 """
-AI/LLM Service — Google Gemini Only
-Provides query_gpt() and generate_insights_text() for all AI features.
+AI/LLM Service — Gemini & OpenRouter Integration
+All AI features route through this module.
+- Fast-fail on 429 (free tier rate limit) — never blocks the analytics pipeline
+- Checks GEMINI_API_KEY, then OPENROUTER_API_KEY as fallback.
 """
-import os
 import json
 import logging
 import time
 import google.generativeai as genai
+import requests
 from app.core.config import settings
 
 logger = logging.getLogger(__name__)
 
+_GEMINI_MODEL = "gemini-2.0-flash"
+_OPENROUTER_MODEL = "google/gemini-2.5-flash"
 
-# ── Fallback Model List ──
-# Priority order: Newest Flash -> General Flash -> Newest Pro -> General Pro
-FALLBACK_MODELS = [
-    "gemini-2.0-flash",
-    "gemini-2.5-flash",
-    "gemini-flash-latest",
-    "gemini-1.5-flash",
-    "gemini-1.5-pro-latest",
-    "gemini-pro-latest"
-]
+# Track last 429 to implement per-session backoff without blocking
+_last_rate_limit_ts: float = 0.0
+_RATE_LIMIT_COOLDOWN = 60.0  # seconds: if we were 429'd recently, skip AI calls
 
-def query_gpt(prompt: str, max_tokens: int = 1000, temperature: float = 0.2) -> str:
+
+def _is_rate_limited() -> bool:
+    """Returns True if we were recently rate-limited (within cooldown window)."""
+    return (time.monotonic() - _last_rate_limit_ts) > 0 and (time.monotonic() - _last_rate_limit_ts) < _RATE_LIMIT_COOLDOWN
+
+
+def query_gpt(prompt: str, max_tokens: int = 800, temperature: float = 0.2) -> str:
     """
-    Query LLM with Model Fallback & Retries.
-    Tries multiple models if one is rate-limited or unavailable.
+    Query Google Gemini OR OpenRouter. Returns a string on success, or an error-JSON string.
     """
-    if not settings.gemini_api_key:
-        logger.error("Gemini API key is missing.")
-        return "Error: AI service unavailable. Missing API Key."
+    global _last_rate_limit_ts
 
-    genai.configure(api_key=settings.gemini_api_key)
+    if not settings.gemini_api_key and not settings.openrouter_api_key:
+        logger.warning("No AI keys configured.")
+        return '{"error": "AI not configured — add GEMINI_API_KEY or OPENROUTER_API_KEY to .env"}'
 
-    last_error = ""
+    if _is_rate_limited():
+        logger.info("Skipping AI call: rate-limit cooldown active (%.0fs remaining).",
+                    _RATE_LIMIT_COOLDOWN - (time.monotonic() - _last_rate_limit_ts))
+        return '{"error": "AI temporarily rate-limited. Analytics still work — try again in a minute."}'
 
-    for model_name in FALLBACK_MODELS:
+    err_str = ""
+    # ── Attempt 1: OpenRouter (if configured) ───────────────────────────────
+    if settings.openrouter_api_key:
         try:
-            # Configure model
-            model = genai.GenerativeModel(model_name)
-            
-            # Attempt generation with retries for transient errors
-            for attempt in range(2): 
-                try:
-                    response = model.generate_content(
-                        prompt,
-                        generation_config=genai.types.GenerationConfig(
-                            max_output_tokens=max_tokens,
-                            temperature=temperature,
-                        )
-                    )
-                    # If successful, return immediately
-                    if response.text:
-                        return response.text.strip()
-                except Exception as e:
-                    err_msg = str(e)
-                    # If quota exceeded (429), break inner retry loop to try next MODEL
-                    if '429' in err_msg or 'Resource exhausted' in err_msg:
-                        logger.warning(f"Model {model_name} rate limited (429). Switching model...")
-                        break 
-                    
-                    # For other errors, maybe retry same model once
-                    time.sleep(1)
-                    last_error = f"{model_name}: {e}"
+            logger.info("Attempting OpenRouter (%s)...", _OPENROUTER_MODEL)
+            response = requests.post(
+                "https://openrouter.ai/api/v1/chat/completions",
+                headers={
+                    "Authorization": f"Bearer {settings.openrouter_api_key}",
+                    "Content-Type": "application/json",
+                    "HTTP-Referer": "http://localhost:8000",
+                    "X-Title": "InsightIQ",
+                },
+                json={
+                    "model": _OPENROUTER_MODEL,
+                    "messages": [{"role": "user", "content": prompt}],
+                    "max_tokens": max_tokens,
+                    "temperature": temperature,
+                },
+                timeout=10
+            )
+
+            if response.status_code == 200:
+                data = response.json()
+                if "choices" in data and len(data["choices"]) > 0:
+                    text = data["choices"][0].get("message", {}).get("content", "").strip()
+                    if text:
+                        return text
+            else:
+                err_str = f"OpenRouter status {response.status_code}: {response.text}"
+                logger.warning(err_str)
+                if response.status_code == 429:
+                    _trigger_rate_limit("OpenRouter")
+                    return '{"error": "AI temporarily rate-limited. Analytics still work — try again in a minute."}'
         
         except Exception as e:
-            logger.error(f"Failed to initialize model {model_name}: {e}")
-            last_error = str(e)
-            continue
+            err_str = f"OpenRouter API exception: {str(e)}"
+            logger.warning(err_str)
 
-    logger.error(f"All AI models failed. Last error: {last_error}")
-    return "Error: AI service temporarily unavailable (Rate Limit or Quota Exceeded)."
+    # ── Attempt 2: Gemini Direct (if configured and Attempt 1 failed/skipped)
+    if settings.gemini_api_key:
+        try:
+            logger.info("Attempting Native Gemini (%s)...", _GEMINI_MODEL)
+            genai.configure(api_key=settings.gemini_api_key)
+            model = genai.GenerativeModel(_GEMINI_MODEL)
+            response = model.generate_content(
+                prompt,
+                generation_config=genai.types.GenerationConfig(
+                    max_output_tokens=max_tokens,
+                    temperature=temperature,
+                ),
+            )
+            text = getattr(response, "text", None)
+            if text:
+                return text.strip()
+            return '{"error": "Gemini returned an empty response"}'
+            
+        except Exception as e:
+            err_str = str(e)
+            if "429" in err_str or "ResourceExhausted" in err_str or "quota" in err_str.lower():
+                _trigger_rate_limit("Native Gemini")
+                return '{"error": "AI temporarily rate-limited. Analytics still work — try again in a minute."}'
+
+            if "403" in err_str or "API_KEY" in err_str.upper():
+                logger.error("Gemini API key rejected: %s", err_str[:200])
+                return '{"error": "Invalid API key. Check GEMINI_API_KEY in .env"}'
+            
+            logger.error("Gemini native error: %s", err_str[:300])
+
+    return '{"error": "AI calls failed — analytics pipeline unaffected."}'
+
+
+def _trigger_rate_limit(source="AI"):
+    global _last_rate_limit_ts
+    _last_rate_limit_ts = time.monotonic()
+    logger.warning("%s 429 rate-limit hit. AI calls paused for %ds.", source, _RATE_LIMIT_COOLDOWN)
 
 
 def generate_insights_text(analysis_payload: dict) -> dict:
-    """Generate structured insights from analytics data."""
+    """Generate structured business insights from analytics data."""
     prompt = (
-        "You are a senior business analyst. Given the following analytics results, "
-        "produce a JSON object with keys: summary, kpis, risks, recommendations.\n"
-        f"Analytics: {json.dumps(analysis_payload, default=str)[:3000]}\n"
-        "Return ONLY valid JSON, no markdown, no code fences, no explanation."
+        "You are a senior business analyst. Given analytics data, "
+        "return a JSON object with keys: summary, kpis, risks, recommendations.\n"
+        f"Data: {json.dumps(analysis_payload, default=str)[:2000]}\n"
+        "Return ONLY valid JSON — no markdown, no code fences."
     )
     try:
         raw = query_gpt(prompt, max_tokens=500, temperature=0.2)
-        
-        if raw.startswith("Error:"):
-            return {"summary": "AI service temporarily unavailable.", "kpis": [], "risks": [], "recommendations": [], "error": raw}
 
-        # Strip markdown code fences if present
+        # Strip markdown code fences if output is wrapped
         cleaned = raw.strip()
         if cleaned.startswith("```"):
-            cleaned = cleaned.split("\n", 1)[1] if "\n" in cleaned else cleaned[3:]
-        if cleaned.endswith("```"):
-            cleaned = cleaned[:-3]
-        cleaned = cleaned.strip()
-        
-        # Extract JSON
-        start = cleaned.find('{')
-        end = cleaned.rfind('}') + 1
+            lines = cleaned.splitlines()
+            end_idx = next((i for i, l in enumerate(lines[1:], 1) if l.strip() == "```"), len(lines))
+            cleaned = "\n".join(lines[1:end_idx]).strip()
+
+        start = cleaned.find("{")
+        end = cleaned.rfind("}") + 1
         if start != -1 and end > start:
-            return json.loads(cleaned[start:end])
+            parsed = json.loads(cleaned[start:end])
+            if "error" in parsed:
+                return {
+                    "summary": "AI temporarily unavailable — analytics are still accurate.",
+                    "kpis": [], "risks": [], "recommendations": [],
+                    "error": parsed["error"],
+                }
+            return parsed
+
         return {"summary": raw, "kpis": [], "risks": [], "recommendations": []}
-    except Exception as e:
-        logger.error(f"Insights generation error: {e}")
-        return {"summary": "", "kpis": [], "risks": [], "recommendations": [], "error": str(e)}
+
+    except Exception as exc:
+        logger.error("generate_insights_text error: %s", exc)
+        return {
+            "summary": "AI error generating insights.", "kpis": [], "risks": [], "recommendations": [],
+            "error": str(exc),
+        }

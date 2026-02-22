@@ -14,6 +14,7 @@ class Settings(BaseSettings):
     jwt_algorithm: str = "HS256"
     access_token_expire_minutes: int = 60
     gemini_api_key: Optional[str] = None
+    openrouter_api_key: Optional[str] = None
     cors_origins: Union[List[str], str] = ["http://localhost:3000", "http://127.0.0.1:3000"]
     upload_dir: str = "./data/uploads"
     app_host: str = "0.0.0.0"

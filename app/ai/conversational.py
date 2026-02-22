@@ -1,248 +1,116 @@
-"""
-Conversational AI / Ask Your Data Engine
-Converts natural language questions to SQL and executes them safely
-"""
 import pandas as pd
 from typing import Dict, Optional, Tuple
-from sqlalchemy import text, inspect
 from app.ai.gpt_service import query_gpt
+import logging
+import re
 
+logger = logging.getLogger(__name__)
 
-ALLOWED_SQL_KEYWORDS = ['SELECT', 'FROM', 'WHERE', 'GROUP', 'ORDER', 'LIMIT', 'SUM', 'AVG', 'COUNT', 'MAX', 'MIN']
-FORBIDDEN_SQL_KEYWORDS = ['DROP', 'DELETE', 'INSERT', 'UPDATE', 'ALTER', 'CREATE', 'TRUNCATE', 'EXEC', '--', ';']
-
-
-def convert_question_to_sql(
-    question: str,
-    table_name: str, 
-    column_names: list,
-    engine
-) -> Tuple[Optional[str], str]:
-    """
-    Convert natural language question to SQL using GPT
-    
-    Args:
-        question: Natural language question
-        table_name: Table to query
-        column_names: Available columns
-        engine: SQLAlchemy engine
-    
-    Returns:
-        Tuple of (sql_query, explanation) or (None, error_message)
-    """
-    
-    try:
-        # Build context for GPT
-        columns_str = ', '.join(column_names[:10])  # First 10 columns
-        
-        prompt = f"""Convert this natural language question to a SQL SELECT query.
-
-Table name: {table_name}
-Available columns: {columns_str}
-
-Question: {question}
-
-Requirements:
-- Only use SELECT statements
-- Only use the available columns
-- Add LIMIT 100 to prevent large queries
-- Return ONLY the raw SQL query, no markdown, no explanation, no code fences
-
-SQL Query:"""
-        
-        sql_query = query_gpt(prompt)
-        
-        if not sql_query:
-            return None, "Could not generate SQL query"
-        
-        # Check if LLM returned an error instead of SQL
-        if sql_query.startswith("Error:"):
-            return None, f"AI service unavailable: {sql_query}"
-        
-        # Strip markdown code fences (```sql ... ```)
-        sql_query = sql_query.strip()
-        if sql_query.startswith("```"):
-            lines = sql_query.split('\n')
-            # Remove first line (```sql) and last line (```)
-            lines = [l for l in lines if not l.strip().startswith('```')]
-            sql_query = '\n'.join(lines).strip()
-        
-        # Must contain SELECT to be valid SQL
-        if 'SELECT' not in sql_query.upper():
-            return None, "AI did not return a valid SQL query. Please try rephrasing your question."
-        
-        # Sanitize the query
-        is_safe, error = validate_sql_query(sql_query, table_name)
-        if not is_safe:
-            return None, error
-        
-        # Ensure LIMIT clause
-        if 'LIMIT' not in sql_query.upper():
-            sql_query = sql_query.rstrip(';') + ' LIMIT 100'
-        
-        return sql_query.strip(), "Query generated successfully"
-    
-    except Exception as e:
-        return None, f"Query generation error: {str(e)}"
-
-
-def validate_sql_query(query: str, table_name: str) -> Tuple[bool, str]:
-    """
-    Validate SQL query safety
-    
-    Returns:
-        Tuple of (is_safe: bool, message: str)
-    """
-    
-    # Check for forbidden keywords
-    query_upper = query.upper()
-    for keyword in FORBIDDEN_SQL_KEYWORDS:
-        if keyword in query_upper:
-            return False, f"Forbidden operation: {keyword}"
-    
-    # Check for SELECT keyword
-    if 'SELECT' not in query_upper:
-        return False, "Query must be a SELECT statement"
-    
-    # Check table name matches
-    if table_name.upper() not in query_upper:
-        return False, f"Query must reference table {table_name}"
-    
-    # Check for suspicious patterns
-    if '/*' in query or '*/' in query:
-        return False, "SQL comments not allowed"
-    
-    return True, "Query is safe"
-
-
-def execute_safe_query(
-    query: str,
-    table_name: str,
-    engine,
-    max_rows: int = 100
-) -> Tuple[Optional[pd.DataFrame], str]:
-    """
-    Execute SQL query safely with constraints
-    
-    Args:
-        query: SQL query
-        table_name: Expected table name
-        engine: SQLAlchemy engine
-        max_rows: Maximum rows to return
-    
-    Returns:
-        Tuple of (dataframe, message/error)
-    """
-    
-    try:
-        # Validate query
-        is_safe, error = validate_sql_query(query, table_name)
-        if not is_safe:
-            return None, error
-        
-        # Ensure LIMIT is present and reasonable
-        if 'LIMIT' not in query.upper():
-            query = query.rstrip(';') + f' LIMIT {max_rows}'
-        
-        # Execute query with timeout
-        with engine.connect() as conn:
-            result = conn.execute(text(query))
-            df = pd.DataFrame(result.fetchall(), columns=result.keys())
-            
-            if len(df) == 0:
-                return df, "Query executed successfully (no results)"
-            
-            return df, f"Query executed successfully ({len(df)} rows)"
-    
-    except Exception as e:
-        return None, f"Query execution error: {str(e)}"
-
-
-def generate_insights_from_result(
-    df: pd.DataFrame,
-    question: str
-) -> str:
-    """
-    Generate natural language insights from query result
-    
-    Args:
-        df: Query result DataFrame
-        question: Original question
-    
-    Returns:
-        Natural language explanation
-    """
-    
-    try:
-        if df.empty:
-            return "The query returned no results. Try refining your question."
-        
-        # Build summary for GPT
-        summary = f"""
-        Original question: {question}
-        
-        Query results ({len(df)} rows):
-        {df.head(10).to_string()}
-        
-        Column summary:
-        {df.dtypes.to_string()}
-        
-        Generate a clear, brief explanation (2-3 sentences) of what these results show.
-        """
-        
-        explanation = query_gpt(summary)
-        return explanation or "Query results retrieved successfully"
-    
-    except Exception as e:
-        return f"Query results obtained ({len(df)} rows)"
-
+FORBIDDEN_BUILTINS = ['import ', 'open(', 'os.', 'subprocess', 'eval(', 'exec(', '__']
 
 async def ask_question(
     question: str,
     table_name: str,
-    column_names: list,
-    engine
+    df: pd.DataFrame
 ) -> Dict:
     """
-    Main entry point for asking questions about data
-    
-    Returns:
-        Dict with query, results, and explanation
+    Main entry point for asking questions about data using Schema-Aware Pandas Engine
     """
     
-    # Generate SQL from question
-    sql_query, gen_error = convert_question_to_sql(question, table_name, column_names, engine)
+    # 1. Generate Schema Metadata
+    # Convert dtypes to string dict
+    schema = {col: str(dtype) for col, dtype in df.dtypes.items()}
+    columns_list = list(schema.keys())
     
-    if not sql_query:
+    # 2. Build Structured Prompt Template
+    prompt = f"""You are a data analyst. `df` columns: {columns_list}
+Answer: "{question}"
+Rules:
+1. Write pandas code assigning to `result`.
+2. ONLY return 1-2 lines of code. No markdown, no explanation.
+3. Use only df. No imports. No files.
+"""
+
+    try:
+        code = query_gpt(prompt).strip()
+        
+        # Check for AI Service error
+        if '"error":' in code:
+            import json
+            try:
+                err_dict = json.loads(code)
+                err_msg = err_dict.get("error", "AI service is temporarily busy. Please try again in 10 seconds.")
+            except:
+                err_msg = "AI service is temporarily busy. Please try again in 10 seconds."
+            return {
+                "success": False,
+                "error": err_msg,
+                "question": question
+            }
+        
+        # Clean code: remove markdown if still present
+        if code.startswith("```"):
+            lines = code.split('\n')
+            lines = [l for l in lines if not l.strip().startswith('```') and not l.strip().startswith('python')]
+            code = '\n'.join(lines).strip()
+
+        # 3. Validate Generated Code
+        for bad in FORBIDDEN_BUILTINS:
+            if bad in code:
+                return {
+                    "success": False,
+                    "error": f"AI generated unsafe code (contains {bad}). Please rephrase.",
+                    "question": question
+                }
+                
+        # Check if code references columns that don't exist
+        col_refs = re.findall(r"df\[['\"](.*?)['\"]\]", code)
+        for col in col_refs:
+            if col not in columns_list:
+                return {
+                    "success": False,
+                    "error": f"AI referenced an unknown column '{col}'. Please refine your question.",
+                    "question": question
+                }
+
+        # 4. Safe Execution
+        allowed_locals = {"df": df}
+        try:
+            exec(code, {}, allowed_locals)
+            result = allowed_locals.get("result", "No result generated. Ensure your code assigns to a variable `result`.")
+        except Exception as e:
+            logger.error(f"Error executing pandas code: {e}")
+            return {
+                "success": False,
+                "error": "I couldn't generate a valid answer for this question. Please try asking differently.",
+                "question": question
+            }
+
+        # Formulate output safely
+        if isinstance(result, pd.DataFrame):
+            # fillna to avoid JSON serialization NaN errors
+            result_list = result.fillna("").head(50).to_dict(orient="records")
+        elif isinstance(result, pd.Series):
+            df_res = result.to_frame(name="Value").reset_index()
+            result_list = df_res.fillna("").head(50).to_dict(orient="records")
+        else:
+            # For single numbers or strings
+            result_list = [{"Answer": str(result)}]
+            
         return {
-            'success': False,
-            'error': gen_error,
-            'question': question
+            "success": True,
+            "question": question,
+            "sql": code,  # keeping key as 'sql' for backward-compatible frontend
+            "results": result_list,
+            "row_count": len(result_list) if isinstance(result_list, list) else 1,
+            "explanation": "Here is the result based on the loaded dataset.",
+            "columns": list(result_list[0].keys()) if isinstance(result_list, list) and len(result_list) > 0 else ["Answer"]
         }
-    
-    # Execute query
-    results_df, exec_error = execute_safe_query(sql_query, table_name, engine)
-    
-    if results_df is None:
+        
+    except Exception as e:
+        logger.error(f"Ask question internal error: {e}")
         return {
-            'success': False,
-            'error': exec_error,
-            'question': question,
-            'sql': sql_query
+            "success": False,
+            "error": "Internal AI error while generating answer.",
+            "question": question
         }
-    
-    # Generate insights
-    explanation = generate_insights_from_result(results_df, question)
-    
-    # Convert dataframe to dict for JSON serialization
-    results = results_df.head(50).to_dict(orient='records')
-    
-    return {
-        'success': True,
-        'question': question,
-        'sql': sql_query,
-        'results': results,
-        'row_count': len(results_df),
-        'explanation': explanation,
-        'columns': list(results_df.columns)
-    }

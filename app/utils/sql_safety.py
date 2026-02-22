@@ -2,12 +2,12 @@ import re
 from sqlalchemy import inspect
 
 
-DATASET_TABLE_PATTERN = re.compile(r"^dataset_[a-f0-9]{32}$")
+DATASET_TABLE_PATTERN = re.compile(r"^[a-zA-Z0-9_]+$")
 
 
 def validate_dataset_table_name(table_name: str) -> str:
     if not DATASET_TABLE_PATTERN.fullmatch(table_name or ""):
-        raise ValueError("Invalid table name format.")
+        raise ValueError(f"Invalid table name format: {table_name}")
     return table_name
 
 

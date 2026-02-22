@@ -80,7 +80,7 @@ def export_pdf_report(request: ReportRequest):
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         logger.error(f"PDF export error: {e}")
-        raise HTTPException(status_code=400, detail=str(e))
+        raise HTTPException(status_code=400, detail="Failed to generate PDF report due to an internal error.")
 
 
 @router.get('/export/csv/{table_name}')

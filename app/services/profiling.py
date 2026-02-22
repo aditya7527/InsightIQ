@@ -7,6 +7,15 @@ import pandas as pd
 import numpy as np
 from typing import Dict, Any, List, Set
 
+# DO NOT COMPUTE REVENUE OUTSIDE revenue_engine.py
+from app.services.revenue_engine import (
+    compute_monthly_revenue,
+    detect_date_column as _rev_detect_date,
+    detect_revenue_column as _rev_detect_revenue,
+    _try_compute_revenue,
+    compute_integrity_score,
+)
+
 # Columns that should NEVER be treated as numeric metrics even if they have numeric dtype
 ID_COLUMN_PATTERNS = [
     'id', 'no', 'code', 'key', 'index', 'uuid', 'guid',
@@ -66,7 +75,22 @@ def profile_dataset(df: pd.DataFrame) -> Dict[str, Any]:
         'correlation_pairs': [],
         'top_countries': None,
         'revenue_by_month': None,
+        'currency': 'UNSPECIFIED',
     }
+
+    # ── Step 0: Detect Currency ──
+    currency_col = _find_col(df, ['currency', 'currency_code', 'currencycode'])
+    if currency_col:
+        profile['currency'] = df[currency_col].dropna().mode().iloc[0] if not df[currency_col].dropna().empty else "UNSPECIFIED"
+    else:
+        country_col = _find_col(df, ['shipcountry', 'ship_country', 'country'])
+        if country_col:
+            top_country = df[country_col].dropna().mode().iloc[0] if not df[country_col].dropna().empty else ""
+            tc_up = str(top_country).upper()
+            if 'INDIA' in tc_up or tc_up == 'IN': profile['currency'] = 'INR'
+            elif 'US' in tc_up or 'UNITED STATES' in tc_up: profile['currency'] = 'USD'
+            elif 'UK' in tc_up or 'GB' in tc_up or 'UNITED KINGDOM' in tc_up: profile['currency'] = 'GBP'
+            elif 'EU' in tc_up or 'EUROPE' in tc_up or 'GERMANY' in tc_up or 'FRANCE' in tc_up: profile['currency'] = 'EUR'
 
     # ── Step 1: Compute Revenue if Quantity and UnitPrice exist ──
     has_quantity = _find_col(df, ['quantity', 'qty', 'units_sold'])
@@ -127,14 +151,13 @@ def profile_dataset(df: pd.DataFrame) -> Dict[str, Any]:
         positive_rev = df.loc[df['Revenue'] > 0, 'Revenue'].sum()
         total_rev = float(df['Revenue'].sum())
 
-        # MoM growth
+        # MoM growth via Revenue Engine (single source of truth)
         mom_growth = None
-        if date_series is not None:
+        rev_result = None
+        if date_series is not None and date_col:
             try:
-                ts_df = df.copy()
-                ts_df['_month'] = date_series.dt.to_period('M')
-                monthly = ts_df.groupby('_month')['Revenue'].sum().sort_index()
-                mom_growth = _compute_mom_growth(monthly)
+                rev_result = compute_monthly_revenue(df, date_col, revenue_col_name)
+                mom_growth = rev_result.get('change_percent')
             except Exception:
                 pass
 
@@ -144,7 +167,7 @@ def profile_dataset(df: pd.DataFrame) -> Dict[str, Any]:
             'column': 'Revenue',
             'icon': 'dollar',
             'format': 'currency',
-            'change_pct': mom_growth
+            'change_pct': mom_growth,
         })
 
         # 5b. Average Order Value

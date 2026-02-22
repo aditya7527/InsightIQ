@@ -23,9 +23,79 @@ def read_dataset(filepath: str) -> pd.DataFrame:
     return pd.read_csv(filepath, encoding='utf-8', errors='ignore')
 
 
-def detect_schema(df: pd.DataFrame) -> Dict[str, str]:
-    schema = {col: str(dtype) for col, dtype in df.dtypes.items()}
-    return schema
+import re
+
+def detect_currency(df: pd.DataFrame) -> str:
+    """Detect dataset currency using Currency column or Ship Country mapping, defaulting to UNSPECIFIED."""
+    # Step 1: Detect Currency column
+    for col in df.columns:
+        col_lower = str(col).lower()
+        if col_lower in ['currency', 'currency_code', 'currencycode']:
+            val = df[col].dropna().mode()
+            if not val.empty:
+                return str(val.iloc[0]).strip().upper()
+
+    # Step 2: Detect via Ship Country
+    for col in df.columns:
+        col_lower = str(col).lower()
+        if col_lower in ['shipcountry', 'ship_country', 'country']:
+            val = df[col].dropna().mode()
+            if not val.empty:
+                tc = str(val.iloc[0]).upper()
+                if 'IN' in tc or 'INDIA' in tc: return 'INR'
+                if 'US' in tc or 'UNITED STATES' in tc: return 'USD'
+                if 'GB' in tc or 'UK' in tc or 'UNITED KINGDOM' in tc: return 'GBP'
+                if 'EU' in tc or 'EUROPE' in tc or 'FRANCE' in tc or 'GERMANY' in tc: return 'EUR'
+
+    return "UNSPECIFIED"
+
+def format_currency(value: float, currency_code: str) -> str:
+    """Format monetary values according to currency code and magnitude."""
+    abs_val = abs(value)
+    if abs_val >= 1_000_000:
+        formatted_num = f"{value / 1_000_000:g}M"
+    elif abs_val >= 1_000:
+        formatted_num = f"{value / 1_000:g}K"
+    else:
+        # Use simple str representation to avoid trailing zeros
+        formatted_num = f"{value:g}"
+
+    code = str(currency_code).upper()
+    if code == 'INR': return f"₹{formatted_num}"
+    if code == 'USD': return f"${formatted_num}"
+    if code == 'GBP': return f"£{formatted_num}"
+    if code == 'EUR': return f"€{formatted_num}"
+    if code == 'UNSPECIFIED' or not code: return f"{formatted_num}"
+    return f"{formatted_num} {code}"
+
+
+
+def detect_schema(df: pd.DataFrame) -> Dict:
+    columns = []
+    numeric_cols = list(df.select_dtypes(include=['number']).columns)
+    date_cols = list(df.select_dtypes(include=['datetime', 'datetimetz']).columns)
+    
+    # Handle dates that were stringified
+    for col in df.columns:
+        dtype_str = str(df[col].dtype)
+        if dtype_str == 'object':
+            # rudimentary check for stringified date
+            if 'date' in str(col).lower() and col not in date_cols:
+                date_cols.append(col)
+                dtype_str = 'datetime'
+                
+        columns.append({"name": str(col), "dtype": dtype_str})
+        
+    categorical_cols = [c for c in df.columns if c not in numeric_cols and c not in date_cols]
+    
+    return {
+        "columns": columns,
+        "row_count": len(df),
+        "numeric_columns": numeric_cols,
+        "categorical_columns": categorical_cols,
+        "date_columns": date_cols,
+        "currency": detect_currency(df)
+    }
 
 
 

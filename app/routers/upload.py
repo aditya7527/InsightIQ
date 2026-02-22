@@ -134,7 +134,7 @@ async def upload_dataset(file: UploadFile = File(...), name: str = Form(...)):
 
         raise HTTPException(
             status_code=400,
-            detail=f"Failed to process file: {str(e)}"
+            detail="Failed to process file: invalid format or corrupted data."
         )
 
     return JSONResponse(content={'status': 'ok', 'metadata': meta})
