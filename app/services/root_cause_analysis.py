@@ -38,6 +38,7 @@ def analyze_root_causes(
     group_cols: Optional[List[str]] = None,
     compare_periods: bool = True,
     rev_result: Optional[Dict] = None,
+    skip_ai: bool = False,
 ) -> Dict:
     """
     Analyze root causes using revenue_engine for period baselines.
@@ -197,9 +198,9 @@ def analyze_root_causes(
         recommendations = _generate_recommendations(final_drivers, change_pct)
         ai_narrative = None
 
-        # Skip AI call when INSIGHTIQ_NO_AI=1 (used by integrity test suite)
-        _skip_ai = os.environ.get("INSIGHTIQ_NO_AI", "0") == "1"
-        if not _skip_ai:
+        # Skip AI call when skip_ai=True or INSIGHTIQ_NO_AI=1 (used by integrity test suite)
+        _env_skip = os.environ.get("INSIGHTIQ_NO_AI", "0") == "1"
+        if not skip_ai and not _env_skip:
             try:
                 from app.ai.gpt_service import query_gpt
                 import json

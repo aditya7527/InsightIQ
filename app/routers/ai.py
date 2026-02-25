@@ -93,7 +93,7 @@ def get_confidence_score(table_name: str):
                 # 3. Significance Result
                 # analyze_root_causes requires df, metric_col, group_cols
                 logger.info("Computing trust index root cause data...")
-                rca_data = analyze_root_causes(df, rev_col, None, rev_result=rev_result)
+                rca_data = analyze_root_causes(df, rev_col, None, rev_result=rev_result, skip_ai=True)
                 significance_result = {
                     "p_value": rca_data.get("p_value", 1.0),
                     "is_significant": rca_data.get("is_significant", False)

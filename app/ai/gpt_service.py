@@ -9,37 +9,49 @@ import logging
 import time
 import google.generativeai as genai
 import requests
+from typing import Dict
 from app.core.config import settings
 
 logger = logging.getLogger(__name__)
 
 _GEMINI_MODEL = "gemini-2.0-flash"
-_OPENROUTER_MODEL = "google/gemini-2.5-flash"
+_OPENROUTER_MODEL = "google/gemini-2.0-flash-001"
 
 # Track last 429 to implement per-session backoff without blocking
 _last_rate_limit_ts: float = 0.0
-_RATE_LIMIT_COOLDOWN = 60.0  # seconds: if we were 429'd recently, skip AI calls
-
+_RATE_LIMIT_COOLDOWN = 30.0  # seconds: if we were 429'd recently, skip AI calls
 
 def _is_rate_limited() -> bool:
     """Returns True if we were recently rate-limited (within cooldown window)."""
     return (time.monotonic() - _last_rate_limit_ts) > 0 and (time.monotonic() - _last_rate_limit_ts) < _RATE_LIMIT_COOLDOWN
 
+# In-memory cache to save quota for identical prompts
+_ai_cache: Dict[str, str] = {}
+_MAX_CACHE_SIZE = 100
 
 def query_gpt(prompt: str, max_tokens: int = 800, temperature: float = 0.2) -> str:
     """
     Query Google Gemini OR OpenRouter. Returns a string on success, or an error-JSON string.
+    Includes simple in-memory caching to preserve API quota.
     """
     global _last_rate_limit_ts
+
+    # 1. Check Cache
+    cache_key = f"{prompt}_{max_tokens}_{temperature}"
+    if cache_key in _ai_cache:
+        logger.info("Serving AI response from cache.")
+        return _ai_cache[cache_key]
 
     if not settings.gemini_api_key and not settings.openrouter_api_key:
         logger.warning("No AI keys configured.")
         return '{"error": "AI not configured — add GEMINI_API_KEY or OPENROUTER_API_KEY to .env"}'
 
     if _is_rate_limited():
-        logger.info("Skipping AI call: rate-limit cooldown active (%.0fs remaining).",
-                    _RATE_LIMIT_COOLDOWN - (time.monotonic() - _last_rate_limit_ts))
-        return '{"error": "AI temporarily rate-limited. Analytics still work — try again in a minute."}'
+        remaining = _RATE_LIMIT_COOLDOWN - (time.monotonic() - _last_rate_limit_ts)
+        # Round up for more natural feeling
+        secs = int(remaining) if remaining > 1 else 1
+        logger.info("Skipping AI call: rate-limit cooldown active (%ds remaining).", secs)
+        return json.dumps({"error": f"AI temporarily rate-limited. Analytics still work — try again in {secs} seconds."})
 
     err_str = ""
     # ── Attempt 1: OpenRouter (if configured) ───────────────────────────────
@@ -68,6 +80,9 @@ def query_gpt(prompt: str, max_tokens: int = 800, temperature: float = 0.2) -> s
                 if "choices" in data and len(data["choices"]) > 0:
                     text = data["choices"][0].get("message", {}).get("content", "").strip()
                     if text:
+                        # Update cache
+                        if len(_ai_cache) < _MAX_CACHE_SIZE:
+                            _ai_cache[cache_key] = text
                         return text
             else:
                 err_str = f"OpenRouter status {response.status_code}: {response.text}"
@@ -95,7 +110,11 @@ def query_gpt(prompt: str, max_tokens: int = 800, temperature: float = 0.2) -> s
             )
             text = getattr(response, "text", None)
             if text:
-                return text.strip()
+                res_text = text.strip()
+                # Update cache
+                if len(_ai_cache) < _MAX_CACHE_SIZE:
+                    _ai_cache[cache_key] = res_text
+                return res_text
             return '{"error": "Gemini returned an empty response"}'
             
         except Exception as e:
