@@ -17,13 +17,13 @@ logger = logging.getLogger(__name__)
 _GEMINI_MODEL = "gemini-2.0-flash"
 _OPENROUTER_MODEL = "google/gemini-2.0-flash-001"
 
-# Track last 429 to implement per-session backoff without blocking
-_last_rate_limit_ts: float = 0.0
-_RATE_LIMIT_COOLDOWN = 30.0  # seconds: if we were 429'd recently, skip AI calls
+# Track per-provider rate limits to allow failover
+_last_429_openrouter: float = 0.0
+_last_429_gemini: float = 0.0
+_RATE_LIMIT_COOLDOWN = 30.0 
 
-def _is_rate_limited() -> bool:
-    """Returns True if we were recently rate-limited (within cooldown window)."""
-    return (time.monotonic() - _last_rate_limit_ts) > 0 and (time.monotonic() - _last_rate_limit_ts) < _RATE_LIMIT_COOLDOWN
+def _is_provider_limited(ts: float) -> bool:
+    return (time.monotonic() - ts) < _RATE_LIMIT_COOLDOWN
 
 # In-memory cache to save quota for identical prompts
 _ai_cache: Dict[str, str] = {}
@@ -31,35 +31,33 @@ _MAX_CACHE_SIZE = 100
 
 def _rate_limit_json() -> str:
     """Helper to generate a consistent rate-limit error JSON."""
-    remaining = _RATE_LIMIT_COOLDOWN - (time.monotonic() - _last_rate_limit_ts)
-    secs = int(remaining) if remaining > 1 else 1
+    # Show the minimum remaining wait time across providers if both are down
+    rem_or = max(0, _RATE_LIMIT_COOLDOWN - (time.monotonic() - _last_429_openrouter))
+    rem_ge = max(0, _RATE_LIMIT_COOLDOWN - (time.monotonic() - _last_429_gemini))
+    
+    # If one is still available, this shouldn't be called, but as a fallback:
+    secs = int(min(rem_or, rem_ge)) if (rem_or > 0 and rem_ge > 0) else 10
     return json.dumps({"error": f"AI temporarily rate-limited. Analytics still work — try again in {secs} seconds."})
 
 def query_gpt(prompt: str, max_tokens: int = 800, temperature: float = 0.2) -> str:
     """
-    Query Google Gemini OR OpenRouter. Returns a string on success, or an error-JSON string.
-    Includes simple in-memory caching to preserve API quota.
+    Query OpenRouter with fallback to Native Gemini.
+    Independent rate-limiting allows failover if one provider is exhausted.
     """
-    global _last_rate_limit_ts
+    global _last_429_openrouter, _last_429_gemini
 
     # 1. Check Cache
     cache_key = f"{prompt}_{max_tokens}_{temperature}"
     if cache_key in _ai_cache:
-        logger.info("Serving AI response from cache.")
         return _ai_cache[cache_key]
 
     if not settings.gemini_api_key and not settings.openrouter_api_key:
-        logger.warning("No AI keys configured.")
         return '{"error": "AI not configured — add GEMINI_API_KEY or OPENROUTER_API_KEY to .env"}'
 
-    if _is_rate_limited():
-        return _rate_limit_json()
-
-    err_str = ""
-    # ── Attempt 1: OpenRouter (if configured) ───────────────────────────────
-    if settings.openrouter_api_key:
+    # ── Attempt 1: OpenRouter ─────────────────────────────────────────────
+    if settings.openrouter_api_key and not _is_provider_limited(_last_429_openrouter):
         try:
-            logger.info("Attempting OpenRouter (%s)...", _OPENROUTER_MODEL)
+            logger.info("Attempting OpenRouter...")
             response = requests.post(
                 "https://openrouter.ai/api/v1/chat/completions",
                 headers={
@@ -78,29 +76,23 @@ def query_gpt(prompt: str, max_tokens: int = 800, temperature: float = 0.2) -> s
             )
 
             if response.status_code == 200:
-                data = response.json()
-                if "choices" in data and len(data["choices"]) > 0:
-                    text = data["choices"][0].get("message", {}).get("content", "").strip()
-                    if text:
-                        # Update cache
-                        if len(_ai_cache) < _MAX_CACHE_SIZE:
-                            _ai_cache[cache_key] = text
-                        return text
+                text = response.json()["choices"][0]["message"]["content"].strip()
+                if text:
+                    if len(_ai_cache) < _MAX_CACHE_SIZE: _ai_cache[cache_key] = text
+                    return text
+            elif response.status_code == 429:
+                logger.warning("OpenRouter 429 hit. Switching to fallback...")
+                _last_429_openrouter = time.monotonic()
+                # Continue to Gemini...
             else:
-                err_str = f"OpenRouter status {response.status_code}: {response.text}"
-                logger.warning(err_str)
-                if response.status_code == 429:
-                    _trigger_rate_limit("OpenRouter")
-                    return _rate_limit_json()
-        
+                logger.warning("OpenRouter error %d: %s", response.status_code, response.text)
         except Exception as e:
-            err_str = f"OpenRouter API exception: {str(e)}"
-            logger.warning(err_str)
+            logger.warning("OpenRouter exception: %s", e)
 
-    # ── Attempt 2: Gemini Direct (if configured and Attempt 1 failed/skipped)
-    if settings.gemini_api_key:
+    # ── Attempt 2: Native Gemini (Fallback) ───────────────────────────────
+    if settings.gemini_api_key and not _is_provider_limited(_last_429_gemini):
         try:
-            logger.info("Attempting Native Gemini (%s)...", _GEMINI_MODEL)
+            logger.info("Attempting Native Gemini...")
             genai.configure(api_key=settings.gemini_api_key)
             model = genai.GenerativeModel(_GEMINI_MODEL)
             response = model.generate_content(
@@ -114,31 +106,25 @@ def query_gpt(prompt: str, max_tokens: int = 800, temperature: float = 0.2) -> s
             text = getattr(response, "text", None)
             if text:
                 res_text = text.strip()
-                # Update cache
-                if len(_ai_cache) < _MAX_CACHE_SIZE:
-                    _ai_cache[cache_key] = res_text
+                if len(_ai_cache) < _MAX_CACHE_SIZE: _ai_cache[cache_key] = res_text
                 return res_text
-            return '{"error": "Gemini returned an empty response"}'
-            
         except Exception as e:
             err_str = str(e)
             if "429" in err_str or "ResourceExhausted" in err_str or "quota" in err_str.lower():
-                _trigger_rate_limit("Native Gemini")
-                return _rate_limit_json()
+                logger.warning("Native Gemini 429 hit.")
+                _last_429_gemini = time.monotonic()
+            else:
+                logger.error("Gemini error: %s", err_str[:300])
 
-            if "403" in err_str or "API_KEY" in err_str.upper():
-                logger.error("Gemini API key rejected: %s", err_str[:200])
-                return '{"error": "Invalid API key. Check GEMINI_API_KEY in .env"}'
-            
-            logger.error("Gemini native error: %s", err_str[:300])
-
-    return '{"error": "AI calls failed — analytics pipeline unaffected."}'
+    return _rate_limit_json()
 
 
 def _trigger_rate_limit(source="AI"):
-    global _last_rate_limit_ts
-    _last_rate_limit_ts = time.monotonic()
-    logger.warning("%s 429 rate-limit hit. AI calls paused for %ds.", source, _RATE_LIMIT_COOLDOWN)
+    """Legacy helper for single-provider triggers (maintained for compat)"""
+    global _last_429_openrouter, _last_429_gemini
+    now = time.monotonic()
+    if "OpenRouter" in source: _last_429_openrouter = now
+    else: _last_429_gemini = now
 
 
 def generate_insights_text(analysis_payload: dict) -> dict:
