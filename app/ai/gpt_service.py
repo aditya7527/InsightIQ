@@ -29,6 +29,12 @@ def _is_rate_limited() -> bool:
 _ai_cache: Dict[str, str] = {}
 _MAX_CACHE_SIZE = 100
 
+def _rate_limit_json() -> str:
+    """Helper to generate a consistent rate-limit error JSON."""
+    remaining = _RATE_LIMIT_COOLDOWN - (time.monotonic() - _last_rate_limit_ts)
+    secs = int(remaining) if remaining > 1 else 1
+    return json.dumps({"error": f"AI temporarily rate-limited. Analytics still work — try again in {secs} seconds."})
+
 def query_gpt(prompt: str, max_tokens: int = 800, temperature: float = 0.2) -> str:
     """
     Query Google Gemini OR OpenRouter. Returns a string on success, or an error-JSON string.
@@ -47,11 +53,7 @@ def query_gpt(prompt: str, max_tokens: int = 800, temperature: float = 0.2) -> s
         return '{"error": "AI not configured — add GEMINI_API_KEY or OPENROUTER_API_KEY to .env"}'
 
     if _is_rate_limited():
-        remaining = _RATE_LIMIT_COOLDOWN - (time.monotonic() - _last_rate_limit_ts)
-        # Round up for more natural feeling
-        secs = int(remaining) if remaining > 1 else 1
-        logger.info("Skipping AI call: rate-limit cooldown active (%ds remaining).", secs)
-        return json.dumps({"error": f"AI temporarily rate-limited. Analytics still work — try again in {secs} seconds."})
+        return _rate_limit_json()
 
     err_str = ""
     # ── Attempt 1: OpenRouter (if configured) ───────────────────────────────
@@ -89,7 +91,7 @@ def query_gpt(prompt: str, max_tokens: int = 800, temperature: float = 0.2) -> s
                 logger.warning(err_str)
                 if response.status_code == 429:
                     _trigger_rate_limit("OpenRouter")
-                    return '{"error": "AI temporarily rate-limited. Analytics still work — try again in a minute."}'
+                    return _rate_limit_json()
         
         except Exception as e:
             err_str = f"OpenRouter API exception: {str(e)}"
@@ -107,6 +109,7 @@ def query_gpt(prompt: str, max_tokens: int = 800, temperature: float = 0.2) -> s
                     max_output_tokens=max_tokens,
                     temperature=temperature,
                 ),
+                request_options={"timeout": 10.0}
             )
             text = getattr(response, "text", None)
             if text:
@@ -121,7 +124,7 @@ def query_gpt(prompt: str, max_tokens: int = 800, temperature: float = 0.2) -> s
             err_str = str(e)
             if "429" in err_str or "ResourceExhausted" in err_str or "quota" in err_str.lower():
                 _trigger_rate_limit("Native Gemini")
-                return '{"error": "AI temporarily rate-limited. Analytics still work — try again in a minute."}'
+                return _rate_limit_json()
 
             if "403" in err_str or "API_KEY" in err_str.upper():
                 logger.error("Gemini API key rejected: %s", err_str[:200])

@@ -16,6 +16,9 @@ from app.utils.sql_safety import validate_dataset_table_name, ensure_table_exist
 router = APIRouter(tags=["AI Features"])
 logger = logging.getLogger(__name__)
 
+# Cache for executive summaries to save API quota
+_summary_cache: Dict[str, Dict] = {}
+
 # Request Models
 class RootCauseRequest(BaseModel):
     table_name: str
@@ -152,6 +155,10 @@ def detect_industry_endpoint(table_name: str):
 @router.get("/summary/{table_name}")
 def get_summary(table_name: str):
     try:
+        if table_name in _summary_cache:
+            logger.info("Serving executive summary from cache for %s", table_name)
+            return _summary_cache[table_name]
+
         df = _get_df(table_name)
         df = _try_compute_revenue(df)
 
@@ -208,14 +215,17 @@ def get_summary(table_name: str):
             if start != -1 and end > start:
                 gpt_data = json.loads(gpt_text[start:end])
                 if "error" not in gpt_data:
+                    _summary_cache[table_name] = gpt_data
                     return gpt_data
         except Exception:
             pass
 
-        return {
+        res = {
             "summary": " ".join(summary_lines),
             "next_steps": next_steps
         }
+        _summary_cache[table_name] = res
+        return res
 
     except HTTPException:
         raise
