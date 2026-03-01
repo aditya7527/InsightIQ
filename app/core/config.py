@@ -6,22 +6,17 @@ import os
 
 load_dotenv()
 
-# Detect Vercel serverless environment (read-only FS, /tmp is the only writable dir)
-_IS_VERCEL = os.environ.get("VERCEL") == "1" or os.environ.get("VERCEL_ENV") is not None
-_DEFAULT_DB = "sqlite:////tmp/insightiq.db" if _IS_VERCEL else "sqlite:///./insightiq.db"
-_DEFAULT_UPLOAD_DIR = "/tmp/uploads" if _IS_VERCEL else "./data/uploads"
-
 
 class Settings(BaseSettings):
     app_env: str = "development"
-    database_url: str = _DEFAULT_DB
+    database_url: str = "sqlite:///./insightiq.db"
     jwt_secret: str = "replace_this_secret"
     jwt_algorithm: str = "HS256"
     access_token_expire_minutes: int = 60
     gemini_api_key: Optional[str] = None
     openrouter_api_key: Optional[str] = None
     cors_origins: Union[List[str], str] = ["http://localhost:3000", "http://127.0.0.1:3000"]
-    upload_dir: str = _DEFAULT_UPLOAD_DIR
+    upload_dir: str = "./data/uploads"
     app_host: str = "0.0.0.0"
     app_port: int = 8001
 
